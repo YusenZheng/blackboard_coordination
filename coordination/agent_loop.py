@@ -17,10 +17,31 @@ TODO:真 LLM 推理(读装配好的 context + Skill 参考 → 输出决策/动�
 """
 from __future__ import annotations
 
+import copy
+
 from ..contracts.blackboard_event import BlackboardEvent, EventType, Ledger
 from ..contracts.task import ActionIntent
 from ..contracts.types import ParticipationDecision
+from .action_executor import DeterministicActionPolicy
 from .context_assembler import Budget, ContextAssembler
+from .models import (
+    AgentPublicSnapshot,
+    AssignmentSnapshot,
+    CoordinationEventType,
+    Effect,
+    EffectKind,
+    IntentSession,
+    IntentState,
+    LoopInput,
+    RoleSlot,
+    StepResult,
+    TaskSessionState,
+    event_content,
+    event_type_value,
+    make_blackboard_event,
+    to_json_value,
+)
+from .policy import EligibilityBidEngine
 
 
 class AgentLoop:
@@ -122,3 +143,258 @@ class AgentLoop:
             content={"intent_id": intent.intent_id, "device_id": intent.device_id,
                      "success": receipt.success}, source=intent.device_id))
         return receipt
+
+
+class PureAgentLoop:
+    """v2 AgentLoop: complete input in, deterministic state/effects out, no I/O."""
+
+    def __init__(
+        self,
+        device_id: str,
+        *,
+        bid_engine: EligibilityBidEngine | None = None,
+        action_policy: DeterministicActionPolicy | None = None,
+    ) -> None:
+        self.device_id = device_id
+        self.bid_engine = bid_engine or EligibilityBidEngine()
+        self.action_policy = action_policy or DeterministicActionPolicy()
+
+    def step(self, loop_input: LoopInput) -> StepResult:
+        session = copy.deepcopy(loop_input.session)
+        event_type = event_type_value(loop_input.event)
+        handlers = {
+            CoordinationEventType.BID_ROUND_OPENED.value: self._on_bid_round_opened,
+            CoordinationEventType.TASK_ASSIGNED.value: self._on_task_assigned,
+            CoordinationEventType.ACTION_INTENT.value: self._on_action_intent,
+            CoordinationEventType.RECEIPT.value: self._on_receipt,
+            CoordinationEventType.SAFETY_INTERCEPT.value: self._on_safety_intercept,
+            CoordinationEventType.ASSIGNMENT_COMPLETED.value: self._on_assignment_completed,
+            CoordinationEventType.TASK_REPLAN.value: self._on_task_replan,
+            CoordinationEventType.TASK_DONE.value: self._on_task_done,
+            CoordinationEventType.TASK_FAILED.value: self._on_task_failed,
+            CoordinationEventType.ESTOP.value: self._on_estop,
+        }
+        handler = handlers.get(event_type)
+        if handler is None:
+            return StepResult([], session, True)
+        return handler(loop_input, session)
+
+    def _on_bid_round_opened(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        if loop_input.task_view is None:
+            return StepResult([], session, False)
+        task_view = loop_input.task_view
+        if task_view.get("terminal_event_id") is not None:
+            return StepResult([], session, True)
+        if int(content.get("task_revision", 0)) != int(task_view.get("task_revision", 0)):
+            return StepResult([], session, True)
+        if loop_input.now > float(content.get("deadline", 0.0)):
+            return StepResult([], session, True)
+
+        task = dict(task_view.get("task", {}))
+        slots_by_id = {
+            slot.slot_id: slot
+            for slot in [RoleSlot.from_dict(value) for value in task.get("role_slots", [])]
+        }
+        requested_ids = [str(value) for value in content.get("slots", [])]
+        if not requested_ids or any(slot_id not in slots_by_id for slot_id in requested_ids):
+            return StepResult([], session, True)
+        role_slots = [slots_by_id[slot_id] for slot_id in requested_ids]
+        payload = self.bid_engine.make_bid(
+            task=task,
+            role_slots=role_slots,
+            snapshot=loop_input.agent_snapshot,
+            execution_availability=loop_input.execution_availability,
+            task_revision=int(content["task_revision"]),
+            coordination_epoch=int(content["coordination_epoch"]),
+            bid_round=int(content.get("bid_round", 1)),
+            deadline=float(content["deadline"]),
+            now=loop_input.now,
+            proposal=loop_input.local_proposal,
+        )
+        event = make_blackboard_event(
+            CoordinationEventType.BID,
+            Ledger.TASK,
+            payload,
+            self.device_id,
+            (
+                f"bid:{payload.task_id}:{payload.task_revision}:"
+                f"{payload.coordination_epoch}:{payload.bid_round}:{self.device_id}"
+            ),
+        )
+        session.task_revision = payload.task_revision
+        session.coordination_epoch = payload.coordination_epoch
+        session.state = TaskSessionState.STANDBY
+        session.session_version += 1
+        return StepResult(
+            [Effect(EffectKind.APPEND_BLACKBOARD_EVENT, event)], session, True
+        )
+
+    def _on_task_assigned(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        task_view = loop_input.task_view
+        if not task_view:
+            return StepResult([], session, False)
+        if task_view.get("terminal_event_id") is not None:
+            return StepResult([], session, True)
+        if task_view.get("replan_pending"):
+            return StepResult([], session, False)
+        revision = int(content.get("task_revision", 0))
+        epoch = int(content.get("coordination_epoch", 0))
+        if revision != int(task_view.get("task_revision", 0)):
+            return StepResult([], session, True)
+        if epoch != int(task_view.get("coordination_epoch", 0)):
+            return StepResult([], session, True)
+        if session.coordination_epoch > epoch:
+            return StepResult([], session, True)
+        current_plan = task_view.get("current_plan")
+        if not isinstance(current_plan, dict):
+            return StepResult([], session, True)
+        if str(content.get("plan_id", "")) != str(current_plan.get("plan_id", "")):
+            return StepResult([], session, True)
+        assignments = [
+            AssignmentSnapshot.from_dict(value) for value in content.get("assignments", [])
+        ]
+        current_assignments = {
+            str(value.get("assignment_id", "")): value
+            for value in current_plan.get("assignments", [])
+            if isinstance(value, dict)
+        }
+        for value in assignments:
+            current = current_assignments.get(value.assignment_id)
+            if current is None:
+                return StepResult([], session, True)
+            if (
+                str(current.get("device_id", "")) != value.device_id
+                or int(current.get("assignment_epoch", 0)) != value.assignment_epoch
+            ):
+                return StepResult([], session, True)
+        assignment = next(
+            (value for value in assignments if value.device_id == self.device_id), None
+        )
+        session.task_revision = revision
+        session.coordination_epoch = epoch
+        session.session_version += 1
+        if assignment is None:
+            session.state = TaskSessionState.STANDBY
+            session.assignment = None
+            session.current_intent = None
+            return StepResult([], session, True)
+
+        submit = self.action_policy.build_submit_payload(
+            task_id=str(content["task_id"]),
+            task_revision=int(content["task_revision"]),
+            coordination_epoch=int(content["coordination_epoch"]),
+            plan_id=str(content["plan_id"]),
+            assignment=assignment,
+        )
+        if session.current_intent and session.current_intent.intent_id == submit.intent.intent_id:
+            if session.current_intent.state in (
+                IntentState.DISPATCHING,
+                IntentState.DISPATCHED,
+                IntentState.SUCCEEDED,
+                IntentState.FAILED,
+                IntentState.SAFETY_BLOCKED,
+                IntentState.DISPATCH_UNKNOWN,
+            ):
+                # 重放 TASK_ASSIGNED 只恢复状态，绝不产生第二次物理下发。
+                session.assignment = assignment
+                session.state = TaskSessionState.ACTIVE
+                return StepResult([], session, True)
+        session.state = TaskSessionState.ACTIVE
+        session.assignment = assignment
+        session.current_intent = IntentSession(
+            intent_id=submit.intent.intent_id,
+            state=IntentState.PROPOSED,
+            intent_fingerprint=submit.intent_fingerprint,
+        )
+        return StepResult(
+            [Effect(EffectKind.SUBMIT_ACTION_INTENT, submit)], session, True
+        )
+
+    def _on_action_intent(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        current = session.current_intent
+        if current and content.get("intent_id") == current.intent_id:
+            # 回读只核对，不再次生成 submit Effect。
+            if current.state == IntentState.PROPOSED:
+                current.state = IntentState.DISPATCHED
+                session.session_version += 1
+        return StepResult([], session, True)
+
+    def _on_receipt(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        current = session.current_intent
+        if current is None or content.get("intent_id") != current.intent_id:
+            return StepResult([], session, True)
+        receipt_id = str(content.get("receipt_id", ""))
+        success = (
+            content.get("success") is True
+            and content.get("outcome_certainty") == "confirmed"
+            and content.get("post_check_allowed") is True
+        )
+        current.state = IntentState.SUCCEEDED if success else (
+            IntentState.DISPATCH_UNKNOWN
+            if content.get("outcome_certainty") == "unknown"
+            else IntentState.FAILED
+        )
+        current.receipt_id = receipt_id or None
+        session.last_receipt_id = receipt_id or None
+        if not success:
+            session.state = TaskSessionState.FAILED
+        session.session_version += 1
+        return StepResult([], session, True)
+
+    def _on_safety_intercept(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        current = session.current_intent
+        if current and content.get("intent_id") == current.intent_id:
+            current.state = IntentState.SAFETY_BLOCKED
+            session.state = TaskSessionState.FAILED
+            session.session_version += 1
+        return StepResult([], session, True)
+
+    def _on_assignment_completed(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        if session.assignment and content.get("assignment_id") == session.assignment.assignment_id:
+            session.state = TaskSessionState.DONE
+            session.session_version += 1
+        return StepResult([], session, True)
+
+    def _on_task_replan(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        if int(content.get("from_epoch", -1)) != session.coordination_epoch:
+            return StepResult([], session, True)
+        session.coordination_epoch = int(content["to_epoch"])
+        session.state = TaskSessionState.OBSERVED
+        session.assignment = None
+        session.current_intent = None
+        session.last_receipt_id = None
+        session.session_version += 1
+        return StepResult([], session, True)
+
+    def _on_task_done(self, loop_input: LoopInput, session) -> StepResult:
+        session.state = TaskSessionState.DONE
+        session.session_version += 1
+        return StepResult(
+            [Effect(EffectKind.CLEANUP_TASK_SESSION, session.task_id)], session, True
+        )
+
+    def _on_task_failed(self, loop_input: LoopInput, session) -> StepResult:
+        session.state = TaskSessionState.FAILED
+        session.session_version += 1
+        return StepResult(
+            [Effect(EffectKind.CLEANUP_TASK_SESSION, session.task_id)], session, True
+        )
+
+    def _on_estop(self, loop_input: LoopInput, session) -> StepResult:
+        content = event_content(loop_input.event)
+        scope_type = content.get("scope_type")
+        scope_id = content.get("scope_id")
+        affected = scope_type == "all" or (
+            scope_type == "device" and scope_id == self.device_id
+        )
+        if content.get("operation") == "stop" and affected:
+            session.state = TaskSessionState.FAILED
+            session.session_version += 1
+        return StepResult([], session, True)

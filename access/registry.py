@@ -13,6 +13,7 @@ TODO:
 """
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 from ..contracts.agent_card import AgentCard
@@ -26,6 +27,10 @@ class Registry:
         self._cards: dict[str, AgentCard] = {}
 
     def register(self, card: AgentCard) -> None:
+        card.extra["card_version"] = max(1, int(card.extra.get("card_version", 0)))
+        card.state.extra["state_updated_at"] = float(
+            card.state.extra.get("state_updated_at") or time.time()
+        )
         self._cards[card.identity.device_id] = card
         print(f"  [注册] 设备 {card.identity.device_id}"
               f"({card.identity.device_type.value}) → Agent 化,能力"
@@ -33,6 +38,14 @@ class Registry:
 
     def refresh(self, device_id: str, card: AgentCard) -> None:
         """能力变化(挂新载荷)时刷新(listChanged 抽象)。"""
+        previous = self._cards.get(device_id)
+        previous_version = (
+            int(previous.extra.get("card_version", 0)) if previous is not None else 0
+        )
+        card.extra["card_version"] = previous_version + 1
+        card.state.extra["state_updated_at"] = float(
+            card.state.extra.get("state_updated_at") or time.time()
+        )
         self._cards[device_id] = card
 
     def get(self, device_id: str) -> Optional[AgentCard]:
@@ -76,3 +89,4 @@ class Registry:
         card.resume.tasks_total += 1
         if success:
             card.resume.tasks_done += 1
+        card.extra["card_version"] = int(card.extra.get("card_version", 1)) + 1

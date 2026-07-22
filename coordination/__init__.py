@@ -1,3 +1,4 @@
+# STATUS: STAGED(A类)—— v1 skeleton 兼容入口 + v2 协同闭环模块导出
 """coordination —— 【L2 协同层 · 发动机】Agent Loop + 挡位选择器 + 冲突分治。
 
 两个正交维度:
@@ -14,3 +15,49 @@
     - AgentNet:证明去中心可行但没上真机;真机要处理物理排他占用(本架构用租约)。
     - Agent Loop 本骨架自研薄版,未复用大框架。
 """
+
+from .action_executor import ActionExecutor, DeterministicActionPolicy
+from .adapters import (
+    MockPhysicalActionGateway,
+    NullLocalProposalPolicy,
+    NullPhysicalActionGateway,
+    NullSkillReferenceProvider,
+    StaticSafetyPort,
+)
+from .agent_loop import AgentLoop, PureAgentLoop
+from .agent_process import AgentProcessHost, AgentProcessSupervisor, SimpleMailbox
+from .blackboard_client import BlackboardClient, BlackboardContractError, ViewNotCaughtUpError
+from .coordinator import ActiveBidRound, Coordinator
+from .file_session_store import FileCoordinatorStore, FileTaskSessionStore
+from .policy import (
+    DeterministicGroupPlanningPolicy,
+    EligibilityBidEngine,
+    MinimalPlanValidator,
+    deterministic_maximum_matching,
+)
+
+__all__ = [
+    "ActionExecutor",
+    "ActiveBidRound",
+    "AgentLoop",
+    "AgentProcessHost",
+    "AgentProcessSupervisor",
+    "BlackboardClient",
+    "BlackboardContractError",
+    "Coordinator",
+    "DeterministicActionPolicy",
+    "DeterministicGroupPlanningPolicy",
+    "EligibilityBidEngine",
+    "FileCoordinatorStore",
+    "FileTaskSessionStore",
+    "MinimalPlanValidator",
+    "MockPhysicalActionGateway",
+    "NullLocalProposalPolicy",
+    "NullPhysicalActionGateway",
+    "NullSkillReferenceProvider",
+    "PureAgentLoop",
+    "SimpleMailbox",
+    "StaticSafetyPort",
+    "ViewNotCaughtUpError",
+    "deterministic_maximum_matching",
+]

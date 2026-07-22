@@ -40,6 +40,9 @@ class Harness:
         self.estop = MockEmergencyStopBus(blackboard=self.blackboard)                # B3
         # 接入(Tool 网关注入急停总线 → 下发前查急停 B1)
         self.registry = Registry()
+        # 高频状态仍留在 Registry/Telemetry 旁路；Blackboard 只在协同决策点
+        # 将其投影成 agent_public 快照，不把每条遥测灌入事件流。
+        self.blackboard.set_agent_snapshot_provider(self.registry)
         self.tool_gateway = ToolGateway(adapters=adapters or {}, estop_bus=self.estop)
         # 协同(含 Skill Graph:Agent Loop 检索经验参考)
         self.assembler = ContextAssembler()

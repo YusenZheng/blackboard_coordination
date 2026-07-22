@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Callable, Optional, Protocol
 
 from .agent_card import AgentCard
-from .blackboard_event import BlackboardEvent, EventType, Ledger
+from .blackboard_event import AppendResult, BlackboardEvent, EventType, Ledger, StoredEvent
 from .task import ActionIntent, ActionReceipt, TaskPackage
 from .types import DeviceCandidate, ParticipationDecision, TaskRequirement
 
@@ -24,14 +24,28 @@ class BlackboardPort(Protocol):
     签名也预留 offset/ack,docstring 声明"真上 Kafka/NATS 语义不变",避免协同层
     依赖同步回调、真上中间件时全层改接口。
     """
-    def append(self, event: BlackboardEvent) -> int:
-        """追加一条事件(状态变化=新事件,不改旧的)。返回 offset。
-        实现须:幂等键去重 + 版本校验(防 lost update)。"""
+    def now(self) -> float:
+        """返回用于事件时间、竞标截止时间的 Unix epoch 秒。"""
+        ...
+
+    def high_watermark(self) -> int:
+        """返回已提交事件的全局 version 水位；空流为 0。"""
+        ...
+
+    def append(self, event: BlackboardEvent) -> AppendResult:
+        """原子追加事件并返回结构化的幂等/冲突结果。"""
         ...
 
     def query_view(self, ledger: Optional[Ledger] = None,
-                   filt: Optional[dict] = None) -> dict:
+                   filt: Optional[dict] = None,
+                   min_version: Optional[int] = None,
+                   timeout_s: float = 0.0) -> dict | list[dict]:
         """读派生的当前状态视图(从事件流折叠,不读全部历史)。"""
+        ...
+
+    def read_since(self, offset: int, event_types: Optional[set[str]],
+                   limit: int, timeout_s: float) -> list[StoredEvent]:
+        """读取严格大于 ``offset`` 的事件；用于 v2 可恢复消费者。"""
         ...
 
     def read_events(self, since_offset: int = 0,

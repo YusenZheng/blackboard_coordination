@@ -66,9 +66,11 @@ class MockAuthorizationGate:
         self._pending[intent_id] = context
         if self._bb is not None:
             from ..contracts.blackboard_event import BlackboardEvent, EventType, Ledger
-            self._bb.append(BlackboardEvent(
-                id=f"auth-{intent_id}", type=EventType.AUTH_POINT, ledger=Ledger.HUMAN,
-                content={"intent_id": intent_id, "context": context}, source="safety"))
+            self._bb.append(BlackboardEvent(id=f"auth-{intent_id}", 
+                                            type=EventType.AUTH_POINT, 
+                                            ledger=Ledger.HUMAN,
+                                            content={"intent_id": intent_id, "context": context}, 
+                                            source="safety"))
         print(f"  [授权点] 不可逆动作 {intent_id} 挂起,推指挥官确认…(R1)")
 
     def resume(self, intent_id: str, decision: AuthDecision) -> None:
@@ -76,16 +78,21 @@ class MockAuthorizationGate:
         self._pending.pop(intent_id, None)
         if self._bb is not None:
             from ..contracts.blackboard_event import BlackboardEvent, EventType, Ledger
-            self._bb.append(BlackboardEvent(
-                id=f"authd-{intent_id}", type=EventType.AUTH_DECISION, ledger=Ledger.HUMAN,
-                content={"intent_id": intent_id, "approved": decision.approved,
-                         "approver": decision.approver}, source="human"))
+            self._bb.append(BlackboardEvent(id=f"authd-{intent_id}", 
+                                            type=EventType.AUTH_DECISION, 
+                                            ledger=Ledger.HUMAN,
+                                            content={"intent_id": intent_id, 
+                                                     "approved": decision.approved,
+                                                     "approver": decision.approver}, 
+                                            source="human"))
         verdict = "放行" if decision.approved else "拒绝"
         print(f"  [授权点] {intent_id} 指挥官{verdict}(approver={decision.approver})")
 
     def auto_confirm(self, intent_id: str, approver: str = "commander") -> AuthDecision:
         """MVP:模拟指挥官确认(auto_approve 时放行)。"""
-        d = AuthDecision(intent_id=intent_id, approved=self._auto, approver=approver,
+        d = AuthDecision(intent_id=intent_id, 
+                         approved=self._auto, 
+                         approver=approver,
                          reason="mock 5s no-veto" if self._auto else "mock veto")
         self.resume(intent_id, d)
         return d

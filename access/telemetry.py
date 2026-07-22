@@ -8,6 +8,8 @@ TODO:真上独立快通道(UDP/MQTT);抄送 Trace 走异步批量。
 """
 from __future__ import annotations
 
+import time
+
 from ..contracts.bypass import TelemetrySample
 
 
@@ -23,5 +25,6 @@ class TelemetryChannel:
             if card is not None:
                 card.state.battery = sample.battery
                 card.state.current_action = sample.current_action
+                card.state.extra["state_updated_at"] = float(sample.ts or time.time())
         if self._trace is not None:
             self._trace.record_telemetry(sample.device_id, sample.__dict__)

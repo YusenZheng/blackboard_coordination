@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .models import fingerprint, to_json_value
+
 
 @dataclass
 class Budget:
@@ -26,6 +28,60 @@ class Budget:
 class ContextAssembler:
     def assemble(self, decision_point: str, blackboard, device_card,
                  budget: Budget = None) -> dict:
-        """按决策点装配上下文。MVP:返回决策点形状(真装配见 TODO)。"""
+        """Deprecated v1 skeleton adapter; v2 must use the typed assemblers below."""
         # TODO:按 2.4 决策点→字段表真装配(黑板视图 + 自身状态 + 线索 + 履历 + 预算)。
         return {"decision_point": decision_point}
+
+    def assemble_local_proposal(
+        self,
+        *,
+        task,
+        role_slots,
+        self_snapshot,
+        hard_offers,
+        relevant_clues=None,
+        skill_references=None,
+        task_revision: int,
+        coordination_epoch: int,
+    ) -> dict:
+        """Build the only context shape exposed to LocalProposalPolicy."""
+        value = {
+            "task": task,
+            "role_slots": role_slots,
+            "self_snapshot": self_snapshot,
+            "hard_offers": hard_offers,
+            "relevant_clues": relevant_clues or [],
+            "skill_references": skill_references or [],
+            "task_revision": task_revision,
+            "coordination_epoch": coordination_epoch,
+        }
+        public_value = to_json_value(value)
+        public_value["context_fingerprint"] = fingerprint(public_value)
+        return public_value
+
+    def assemble_group_planning(
+        self,
+        *,
+        task,
+        role_slots,
+        bids,
+        proposals,
+        agent_snapshots,
+        evidence_view,
+        task_revision: int,
+        coordination_epoch: int,
+    ) -> dict:
+        """Build the finite, read-only GroupPlanningPolicy input."""
+        value = {
+            "task": task,
+            "role_slots": role_slots,
+            "bids": bids,
+            "proposals": proposals,
+            "agent_snapshots": agent_snapshots,
+            "evidence_view": evidence_view,
+            "task_revision": task_revision,
+            "coordination_epoch": coordination_epoch,
+        }
+        public_value = to_json_value(value)
+        public_value["input_fingerprint"] = fingerprint(public_value)
+        return public_value
