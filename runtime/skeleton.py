@@ -66,6 +66,7 @@ def run() -> Harness:
                                         type=EventType.TASK_POSTED, 
                                         ledger=Ledger.TASK,
                                         content={"task_id": task.task_id, 
+                                                 "task_type": task.task_type,
                                                  "goal": task.goal  }, 
                                         source="ingress"))
 

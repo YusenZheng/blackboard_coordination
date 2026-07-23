@@ -55,7 +55,7 @@ class Harness:
         from ..access.telemetry import TelemetryChannel
         self.telemetry = TelemetryChannel(registry=self.registry, trace=self.trace)  # B4
         # 北向
-        self.task_gen = TaskGen()
+        self.task_gen = TaskGen(registry=self.registry)
         # 每设备一个云端虚拟 Agent 的 loop
         self._loops: dict = {}
 
