@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 
 from ..contracts.task import TaskPackage
+from ..contracts.task_types import SEARCH_TARGET
 from ..contracts.types import Position, TaskRequirement
 
 
@@ -83,5 +84,5 @@ class TaskGen:
     @staticmethod
     def _intent(raw: str, seq: int) -> dict:
         # MVP:写死"找狗";真上接 LLM。id 带序号避免多任务撞 id。
-        return {"task_id": f"find_dog_{seq:03d}", "task_type": "search_target",
+        return {"task_id": f"find_dog_{seq:03d}", "task_type": SEARCH_TARGET,
                 "goal": raw or "帮我找一只走失的萨摩耶幼犬"}
