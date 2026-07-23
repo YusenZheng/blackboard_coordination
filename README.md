@@ -12,6 +12,16 @@
 - 核心链路**零第三方依赖**(纯标准库),克隆后直接运行
 - 前台接口为可选依赖:`pip install fastapi uvicorn`
 
+### 本地开发环境（Windows / PowerShell 7）
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install pytest
+```
+
+`.venv/` 仅供本地使用，已加入 `.gitignore`，不会提交到 Git。
+
 ## 快速开始
 
 ```bash
@@ -60,6 +70,7 @@ swarm_brain/
   safety/       安全平面(横切):三层门控 + 信任等级 A0–A4 + 可逆性 R0/R1/R2 + 急停。
   access/       接入层:Agent 化注册 + 工具网关 + 适配器 + 遥测 + 坐标。
   ingress/      北向入口:任务生成流水线 + 事件接入 + 三出向接口。
+  llm/          大模型配置:连接信息 + 生成参数(不绑定具体厂商 SDK)。
   memory/       记忆:私有记忆 + 共享事实库(接口已定义,实现待补)。
   runtime/      Harness 装配 + walking skeleton。
 sim/            仿真:可通过性引擎 + 仿真适配器 + 网格桩(独立顶层)。
@@ -78,6 +89,7 @@ tests/          冒烟测试。
 | 安全平面   | `safety/`             | guardrail / autonomy / reversibility / estop                     |
 | 接入层    | `access/`             | registry / tool_gateway / tools/ / adapters / telemetry / frames |
 | 北向入口   | `ingress/`            | task_gen(三段流水线)/ event_ingress / interfaces_out                  |
+| 大模型配置  | `llm/`                | 统一管理模型连接信息与生成参数，不保存密钥、不绑定具体厂商 SDK                         |
 | 记忆     | `memory/`             | 私有记忆 + 事实库(接口位)                                                  |
 | 运行时    | `runtime/`            | harness(装配)/ skeleton                                            |
 | 独立顶层   | `sim/` `eval/` `api/` | 仿真 / 评测 / 前台接口                                                   |
