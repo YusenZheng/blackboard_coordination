@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SwarmBrain · 协同实时看板</title>
+  <style>
+    :root {
+      --bg: #edf4fc;
+      --panel: rgba(255, 255, 255, .94);
+      --panel-2: #f7faff;
+      --line: rgba(74, 101, 145, .16);
+      --text: #18263b;
+      --muted: #64748b;
+      --cyan: #0aa8bd;
+      --blue: #3974e9;
+      --purple: #7d56d9;
+      --orange: #e98b25;
+      --green: #159b6c;
+      --red: #d94758;
+      --shadow: 0 16px 42px rgba(55, 78, 115, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(74, 132, 239, .16), transparent 34%),
+        radial-gradient(circle at 92% 8%, rgba(128, 87, 217, .13), transparent 30%),
+        linear-gradient(180deg, #f7fbff 0, var(--bg) 48%, #e8f1fb 100%),
+        var(--bg);
+      font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    .shell {
+      width: min(1560px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 26px 0 46px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 13px; }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(78, 216, 232, .38);
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      background: linear-gradient(145deg, rgba(78, 216, 232, .16), rgba(95, 140, 255, .08));
+      box-shadow: 0 0 30px rgba(10, 168, 189, .12);
+      font-weight: 800;
+      letter-spacing: -.06em;
+    }
+
+    h1 { margin: 0; font-size: 21px; letter-spacing: .01em; }
+    .subtitle { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .live-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .72);
+      font-size: 12px;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #526078;
+    }
+
+    .live-pill.connected .live-dot {
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(75, 211, 155, .11), 0 0 14px rgba(75, 211, 155, .7);
+      animation: breathe 1.8s infinite;
+    }
+
+    @keyframes breathe { 50% { opacity: .48; } }
+
+    .command {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .8);
+      box-shadow: var(--shadow);
+    }
+
+    .command input {
+      width: 100%;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid rgba(151, 173, 211, .2);
+      border-radius: 11px;
+      outline: 0;
+      padding: 13px 15px;
+    }
+
+    .command input:focus {
+      border-color: rgba(78, 216, 232, .72);
+      box-shadow: 0 0 0 3px rgba(78, 216, 232, .08);
+    }
+
+    .command button {
+      border: 0;
+      border-radius: 11px;
+      padding: 0 22px;
+      min-height: 46px;
+      color: #04131d;
+      background: linear-gradient(135deg, var(--cyan), #72e4c3);
+      font-weight: 750;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(78, 216, 232, .18);
+    }
+
+    .command button:disabled { opacity: .5; cursor: wait; }
+
+    .stage-banner {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 42px;
+      margin: 12px 2px 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stage-icon {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 16px rgba(95, 140, 255, .6);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .metric {
+      min-height: 90px;
+      padding: 16px 17px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+    }
+
+    .metric-label { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .metric-value { margin-top: 9px; font-size: 25px; font-weight: 760; }
+    .metric-note { margin-top: 3px; color: var(--muted); font-size: 11px; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      min-height: 52px;
+      padding: 0 17px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title { font-size: 13px; font-weight: 720; }
+    .panel-kicker { color: var(--muted); font-size: 11px; }
+
+    .flow-panel { padding-bottom: 16px; margin-bottom: 12px; }
+    .flow-scroll { overflow-x: auto; padding: 18px 17px 4px; scrollbar-width: thin; }
+
+    .flow {
+      min-width: 1160px;
+      display: grid;
+      grid-template-columns: repeat(9, minmax(104px, 1fr));
+      gap: 15px;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 78px;
+      padding: 13px 12px;
+      border: 1px solid rgba(151, 173, 211, .17);
+      border-radius: 12px;
+      background: #f7faff;
+      transition: border-color .25s, transform .25s, background .25s;
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: calc(100% + 1px);
+      width: 15px;
+      height: 1px;
+      background: rgba(151, 173, 211, .26);
+    }
+
+    .flow-step:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      top: calc(50% - 3px);
+      right: -16px;
+      border-left: 5px solid rgba(151, 173, 211, .35);
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+    }
+
+    .flow-step.done {
+      border-color: rgba(75, 211, 155, .52);
+      background: linear-gradient(145deg, rgba(21, 155, 108, .13), #f7faff 72%);
+    }
+
+    .flow-step.active {
+      transform: translateY(-3px);
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(10, 168, 189, .08), 0 10px 26px rgba(55, 78, 115, .14);
+    }
+
+    .flow-step.active::after { background: var(--cyan); }
+    .step-num { color: var(--muted); font-size: 10px; }
+    .step-name { margin-top: 8px; font-size: 12px; font-weight: 720; }
+    .step-count { margin-top: 5px; color: var(--muted); font-size: 10px; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.65fr) minmax(330px, .78fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .timeline {
+      height: 560px;
+      overflow: auto;
+      padding: 9px 17px 17px;
+      scrollbar-color: #314665 transparent;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 420px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    .event-row {
+      display: grid;
+      grid-template-columns: 46px 12px minmax(0, 1fr);
+      gap: 12px;
+      position: relative;
+      padding: 10px 0;
+      cursor: pointer;
+    }
+
+    .event-row:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 33px;
+      bottom: -10px;
+      left: 63px;
+      width: 1px;
+      background: rgba(151, 173, 211, .17);
+    }
+
+    .event-version {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+      padding-top: 3px;
+    }
+
+    .event-dot {
+      z-index: 1;
+      width: 10px;
+      height: 10px;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: var(--orange);
+      box-shadow: 0 0 0 4px rgba(255, 177, 78, .09);
+    }
+
+    .event-card {
+      min-width: 0;
+      padding: 11px 13px;
+      border: 1px solid rgba(151, 173, 211, .14);
+      border-radius: 11px;
+      background: #f8fbff;
+    }
+
+    .event-top { display: flex; justify-content: space-between; gap: 15px; }
+    .event-type { font-size: 12px; font-weight: 760; color: #14233a; }
+    .event-source { color: var(--muted); font-size: 10px; }
+    .event-summary { margin-top: 7px; color: #53667f; font-size: 12px; line-height: 1.55; }
+
+    .side-stack { display: grid; gap: 12px; }
+    .side-body { padding: 15px 16px 17px; }
+
+    .agents { display: grid; grid-template-columns: 1fr; gap: 10px; }
+
+    .agent {
+      border: 1px solid rgba(151, 173, 211, .16);
+      border-radius: 12px;
+      padding: 13px;
+      background: #f8fbff;
+      transition: border-color .25s, background .25s;
+    }
+
+    .agent.winner {
+      border-color: rgba(75, 211, 155, .6);
+      background: linear-gradient(145deg, rgba(21, 155, 108, .12), #f8fbff);
+    }
+
+    .agent-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .agent-name { font-size: 13px; font-weight: 750; }
+
+    .badge {
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(143, 162, 191, .1);
+      font-size: 9px;
+    }
+
+    .badge.accept { color: var(--green); background: rgba(75, 211, 155, .11); }
+    .agent dl, .fact-grid { margin: 12px 0 0; display: grid; gap: 7px; }
+    .agent dl div, .fact { display: flex; justify-content: space-between; gap: 10px; }
+    dt, .fact-key { color: var(--muted); font-size: 10px; }
+    dd, .fact-value { margin: 0; color: #344962; font-size: 10px; text-align: right; }
+
+    .reason {
+      min-height: 54px;
+      color: #455b75;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .session-section {
+      margin-top: 13px;
+      padding-top: 11px;
+      border-top: 1px solid rgba(74, 101, 145, .12);
+    }
+
+    .session-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .06em;
+    }
+
+    .session-title span:last-child {
+      color: var(--purple);
+      letter-spacing: 0;
+    }
+
+    .session-history {
+      display: grid;
+      gap: 6px;
+      margin-top: 9px;
+    }
+
+    .session-empty {
+      padding: 10px;
+      color: var(--muted);
+      background: rgba(57, 116, 233, .04);
+      border: 1px dashed rgba(74, 101, 145, .2);
+      border-radius: 8px;
+      font-size: 10px;
+      text-align: center;
+    }
+
+    .session-snapshot {
+      overflow: hidden;
+      border: 1px solid rgba(74, 101, 145, .14);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .session-snapshot summary {
+      cursor: pointer;
+      padding: 8px 9px;
+      color: #455b75;
+      font-size: 9px;
+      font-weight: 650;
+    }
+
+    .session-snapshot pre {
+      max-height: 180px;
+      margin: 0;
+      overflow: auto;
+      padding: 9px;
+      color: #334b68;
+      background: #f5f8fc;
+      border-top: 1px solid rgba(74, 101, 145, .1);
+      font: 9px/1.55 "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .raw {
+      margin-top: 12px;
+      overflow: hidden;
+    }
+
+    .raw summary {
+      cursor: pointer;
+      padding: 13px 16px;
+      color: var(--muted);
+      font-size: 11px;
+      border-bottom: 1px solid transparent;
+    }
+
+    .raw[open] summary { border-bottom-color: var(--line); }
+    .raw pre {
+      max-height: 360px;
+      margin: 0;
+      overflow: auto;
+      padding: 15px 16px;
+      color: #334b68;
+      background: #f5f8fc;
+      font: 11px/1.62 "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .error { color: var(--red) !important; }
+    .success { color: var(--green) !important; }
+
+    .llm-panel { margin-top: 12px; overflow: hidden; }
+    .llm-totals { display: flex; gap: 16px; color: var(--muted); font-size: 10px; }
+    .llm-totals strong { color: var(--text); font-size: 12px; }
+    .table-wrap { overflow-x: auto; }
+    .llm-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    .llm-table th {
+      padding: 11px 16px;
+      color: var(--muted);
+      background: #f7faff;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .04em;
+    }
+    .llm-table td {
+      padding: 13px 16px;
+      color: #3c5069;
+      border-bottom: 1px solid rgba(74, 101, 145, .1);
+      font-size: 11px;
+    }
+    .llm-table tr:last-child td { border-bottom: 0; }
+    .llm-operation { color: #1b3151 !important; font-weight: 720; }
+    .llm-status {
+      display: inline-block;
+      min-width: 42px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--green);
+      background: rgba(21, 155, 108, .1);
+      text-align: center;
+      font-size: 9px;
+    }
+    .llm-status.failed { color: var(--red); background: rgba(217, 71, 88, .1); }
+    .llm-empty { color: var(--muted) !important; text-align: center; padding: 24px !important; }
+
+    @media (max-width: 980px) {
+      .shell { width: min(100% - 24px, 1560px); padding-top: 17px; }
+      .main-grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .timeline { height: 470px; }
+    }
+
+    @media (max-width: 580px) {
+      .topbar { align-items: flex-start; }
+      .command { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metric { min-height: 78px; }
+      .metric-value { font-size: 20px; }
+      .agents { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">SB</div>
+        <div>
+          <h1>协同层实时看板</h1>
+          <div class="subtitle">Blackboard authority · Coordination v2 · Local runtime</div>
+        </div>
+      </div>
+      <div class="live-pill" id="connection">
+        <span class="live-dot"></span>
+        <span id="connectionText">等待启动</span>
+      </div>
+    </header>
+
+    <section class="command">
+      <input id="instruction" value="帮我找公园里走失的白色萨摩耶" maxlength="1000" aria-label="任务指令">
+      <button id="runButton">启动协同闭环</button>
+    </section>
+
+    <div class="stage-banner">
+      <span class="stage-icon"></span>
+      <span id="stageText">输入任务后，页面会订阅真实 Blackboard 事件流。</span>
+    </div>
+
+    <section class="metrics">
+      <article class="metric">
+        <div class="metric-label">Global watermark</div>
+        <div class="metric-value" id="watermark">0</div>
+        <div class="metric-note">黑板权威全局水位</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Events</div>
+        <div class="metric-value"><span id="eventCount">0</span><span style="color:var(--muted);font-size:14px"> / 9</span></div>
+        <div class="metric-note">已提交协同事件</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Task status</div>
+        <div class="metric-value" id="taskStatus">idle</div>
+        <div class="metric-note" id="modelName">DeepSeek · 未启动</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">Winner</div>
+        <div class="metric-value" id="winner">—</div>
+        <div class="metric-note">确定性校验后的正式归属</div>
+      </article>
+    </section>
+
+    <section class="panel flow-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">协同闭环</div>
+          <div class="panel-kicker">每个节点对应一类 Blackboard 事件</div>
+        </div>
+        <div class="panel-kicker">实线流转 · append-only</div>
+      </div>
+      <div class="flow-scroll"><div class="flow" id="flow"></div></div>
+    </section>
+
+    <div class="main-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Blackboard 事件流</div>
+            <div class="panel-kicker">点击事件可查看完整 payload</div>
+          </div>
+          <div class="panel-kicker" id="runId">run —</div>
+        </div>
+        <div class="timeline" id="timeline">
+          <div class="empty" id="emptyState">
+            <div>尚无事件<br>点击“启动协同闭环”开始实时观察</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">设备 AgentLoop</div>
+            <div class="panel-kicker">独立上下文 / 独立 BID</div>
+          </div>
+          <div class="side-body agents">
+            <article class="agent" id="agent-dog-a">
+              <div class="agent-head"><span class="agent-name">dog-a</span><span class="badge" id="badge-dog-a">等待</span></div>
+              <dl>
+                <div><dt>电量余量</dt><dd id="battery-dog-a">—</dd></div>
+                <div><dt>可靠性</dt><dd id="reliability-dog-a">—</dd></div>
+                <div><dt>模型置信</dt><dd id="confidence-dog-a">—</dd></div>
+              </dl>
+              <div class="session-section">
+                <div class="session-title">
+                  <span>PRIVATE SESSION</span>
+                  <span id="sessionState-dog-a">未创建</span>
+                </div>
+                <div class="session-history" id="sessionHistory-dog-a">
+                  <div class="session-empty">尚无私有 Session 快照</div>
+                </div>
+              </div>
+            </article>
+            <article class="agent" id="agent-dog-b">
+              <div class="agent-head"><span class="agent-name">dog-b</span><span class="badge" id="badge-dog-b">等待</span></div>
+              <dl>
+                <div><dt>电量余量</dt><dd id="battery-dog-b">—</dd></div>
+                <div><dt>可靠性</dt><dd id="reliability-dog-b">—</dd></div>
+                <div><dt>模型置信</dt><dd id="confidence-dog-b">—</dd></div>
+              </dl>
+              <div class="session-section">
+                <div class="session-title">
+                  <span>PRIVATE SESSION</span>
+                  <span id="sessionState-dog-b">未创建</span>
+                </div>
+                <div class="session-history" id="sessionHistory-dog-b">
+                  <div class="session-empty">尚无私有 Session 快照</div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">集中判给</div>
+            <div class="panel-kicker">LLM candidate → Validator</div>
+          </div>
+          <div class="side-body">
+            <div class="reason" id="groupReason">等待两个有效 BID。</div>
+            <div class="fact-grid">
+              <div class="fact"><span class="fact-key">正式中标</span><span class="fact-value" id="assignedDevice">—</span></div>
+              <div class="fact"><span class="fact-key">候选已采用</span><span class="fact-value" id="candidateMatch">—</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">动作与回执</div>
+            <div class="panel-kicker">Safety / Access boundary</div>
+          </div>
+          <div class="side-body">
+            <div class="fact-grid" style="margin-top:0">
+              <div class="fact"><span class="fact-key">执行设备</span><span class="fact-value" id="actionDevice">—</span></div>
+              <div class="fact"><span class="fact-key">受限动作</span><span class="fact-value" id="actionVerb">—</span></div>
+              <div class="fact"><span class="fact-key">安全拦截</span><span class="fact-value" id="safetyState">—</span></div>
+              <div class="fact"><span class="fact-key">回执</span><span class="fact-value" id="receiptState">—</span></div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="panel llm-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">LLM 调用明细</div>
+          <div class="panel-kicker">Token 来自 DeepSeek usage；耗时由服务端实际计时</div>
+        </div>
+        <div class="llm-totals">
+          <span>调用 <strong id="llmCallCount">0</strong></span>
+          <span>Token <strong id="llmTotalTokens">0</strong></span>
+          <span>耗时 <strong id="llmTotalDuration">0 ms</strong></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="llm-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>调用阶段</th>
+              <th>模型</th>
+              <th>输入 Token</th>
+              <th>输出 Token</th>
+              <th>总 Token</th>
+              <th>耗时</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="llmRows">
+            <tr id="llmEmptyRow"><td class="llm-empty" colspan="8">启动任务后显示真实模型调用指标</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <details class="panel raw" id="rawPanel">
+      <summary>选中事件 / 最终结果 JSON</summary>
+      <pre id="rawJson">等待数据</pre>
+    </details>
+  </div>
+
+  <script>
+    const FLOW = [
+      ["task_posted", "任务发布", 1],
+      ["bid_round_opened", "开启竞标", 1],
+      ["bid", "设备 BID", 2],
+      ["task_assigned", "集中判给", 1],
+      ["action_intent", "动作意图", 1],
+      ["receipt", "执行回执", 1],
+      ["assignment_completed", "角色完成", 1],
+      ["task_done", "任务终态", 1],
+      ["memory_cleaned", "内存清理", 1]
+    ];
+
+    const TYPE_LABELS = {
+      task_posted: "TASK_POSTED",
+      bid_round_opened: "BID_ROUND_OPENED",
+      bid: "BID",
+      task_assigned: "TASK_ASSIGNED",
+      action_intent: "ACTION_INTENT",
+      receipt: "RECEIPT",
+      assignment_completed: "ASSIGNMENT_COMPLETED",
+      task_done: "TASK_DONE"
+    };
+
+    const ui = Object.fromEntries([
+      "instruction", "runButton", "connection", "connectionText", "stageText",
+      "watermark", "eventCount", "taskStatus", "modelName", "winner", "flow",
+      "timeline", "emptyState", "runId", "groupReason", "assignedDevice",
+      "candidateMatch", "actionDevice", "actionVerb", "safetyState",
+      "receiptState", "rawJson", "rawPanel", "llmRows", "llmCallCount",
+      "llmTotalTokens", "llmTotalDuration"
+    ].map(id => [id, document.getElementById(id)]));
+
+    let source = null;
+    let counts = {};
+    let receivedEvents = [];
+    let llmCalls = [];
+
+    const OPERATION_LABELS = {
+      intent_interpretation: "意图识别",
+      "local_proposal:dog-a": "dog-a 协作判断",
+      "local_proposal:dog-b": "dog-b 协作判断",
+      group_planning: "群体集中判给",
+      healthcheck: "连接检查"
+    };
+
+    const SESSION_PHASE_LABELS = {
+      after_bid: "竞标后",
+      after_assignment_execution: "分配 / 执行后",
+      before_terminal_cleanup: "终态清理前",
+      after_task_done_cleanup: "TASK_DONE 清理后"
+    };
+
+    function renderFlow() {
+      ui.flow.replaceChildren();
+      FLOW.forEach(([type, label, expected], index) => {
+        const node = document.createElement("div");
+        node.className = "flow-step";
+        node.dataset.type = type;
+        const num = document.createElement("div");
+        num.className = "step-num";
+        num.textContent = String(index + 1).padStart(2, "0");
+        const name = document.createElement("div");
+        name.className = "step-name";
+        name.textContent = label;
+        const count = document.createElement("div");
+        count.className = "step-count";
+        count.textContent = `0 / ${expected}`;
+        node.append(num, name, count);
+        ui.flow.appendChild(node);
+      });
+    }
+
+    function resetUI() {
+      counts = {};
+      receivedEvents = [];
+      llmCalls = [];
+      renderFlow();
+      ui.timeline.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.id = "emptyState";
+      empty.textContent = "运行已启动，等待第一个 Blackboard 事件…";
+      ui.timeline.appendChild(empty);
+      ui.watermark.textContent = "0";
+      ui.eventCount.textContent = "0";
+      ui.taskStatus.textContent = "starting";
+      ui.taskStatus.className = "metric-value";
+      ui.winner.textContent = "—";
+      ui.modelName.textContent = "DeepSeek · 连接中";
+      ui.groupReason.textContent = "等待两个有效 BID。";
+      ui.assignedDevice.textContent = "—";
+      ui.candidateMatch.textContent = "—";
+      ui.actionDevice.textContent = "—";
+      ui.actionVerb.textContent = "—";
+      ui.safetyState.textContent = "—";
+      ui.receiptState.textContent = "—";
+      ui.rawJson.textContent = "等待数据";
+      ui.llmRows.replaceChildren();
+      const llmEmpty = document.createElement("tr");
+      const llmCell = document.createElement("td");
+      llmCell.className = "llm-empty";
+      llmCell.colSpan = 8;
+      llmCell.textContent = "等待真实模型调用…";
+      llmEmpty.appendChild(llmCell);
+      ui.llmRows.appendChild(llmEmpty);
+      ui.llmCallCount.textContent = "0";
+      ui.llmTotalTokens.textContent = "0";
+      ui.llmTotalDuration.textContent = "0 ms";
+      ["dog-a", "dog-b"].forEach(id => {
+        document.getElementById(`agent-${id}`).classList.remove("winner");
+        const badge = document.getElementById(`badge-${id}`);
+        badge.textContent = "等待";
+        badge.className = "badge";
+        document.getElementById(`battery-${id}`).textContent = "—";
+        document.getElementById(`reliability-${id}`).textContent = "—";
+        document.getElementById(`confidence-${id}`).textContent = "—";
+        document.getElementById(`sessionState-${id}`).textContent = "未创建";
+        const sessionHistory = document.getElementById(`sessionHistory-${id}`);
+        sessionHistory.replaceChildren();
+        const sessionEmpty = document.createElement("div");
+        sessionEmpty.className = "session-empty";
+        sessionEmpty.textContent = "尚无私有 Session 快照";
+        sessionHistory.appendChild(sessionEmpty);
+      });
+    }
+
+    function updateFlow(type) {
+      counts[type] = (counts[type] || 0) + 1;
+      const nodes = [...ui.flow.querySelectorAll(".flow-step")];
+      nodes.forEach(node => node.classList.remove("active"));
+      const node = ui.flow.querySelector(`[data-type="${type}"]`);
+      if (!node) return;
+      const expected = FLOW.find(item => item[0] === type)[2];
+      node.querySelector(".step-count").textContent = `${Math.min(counts[type], expected)} / ${expected}`;
+      node.classList.add(counts[type] >= expected ? "done" : "active");
+      const index = nodes.indexOf(node);
+      if (counts[type] >= expected && nodes[index + 1]) nodes[index + 1].classList.add("active");
+    }
+
+    function eventSummary(event) {
+      const c = event.content || {};
+      switch (event.type) {
+        case "task_posted": return c.goal || "结构化任务已发布";
+        case "bid_round_opened": return `槽位 ${(c.slots || []).join(", ")} · epoch ${c.coordination_epoch}`;
+        case "bid": {
+          const offer = (c.offers || [])[0] || {};
+          const m = offer.metrics || {};
+          return `${c.device_id} ${offer.decision || "—"} · 电量余量 ${formatNumber(m.battery_margin)} · 可靠性 ${formatNumber(m.reliability)}`;
+        }
+        case "task_assigned": {
+          const row = (c.assignments || [])[0] || {};
+          return `${row.device_id || "—"} 获得 ${row.slot_id || "—"} · ${c.plan_id || ""}`;
+        }
+        case "action_intent": return `${c.device_id} → ${c.verb}(${JSON.stringify(c.params || {})})`;
+        case "receipt": return `${c.device_id} · success=${String(c.success)} · ${c.outcome_certainty || ""}`;
+        case "assignment_completed": return `${c.assignment_id || "角色"} 已完成`;
+        case "task_done": return `任务 ${c.task_id || ""} 已进入终态`;
+        default: return "事件已提交";
+      }
+    }
+
+    function addEvent(event) {
+      const empty = ui.timeline.querySelector(".empty");
+      if (empty) empty.remove();
+      receivedEvents.push(event);
+      ui.watermark.textContent = String(event.version || receivedEvents.length);
+      ui.eventCount.textContent = String(receivedEvents.length);
+      updateFlow(event.type);
+
+      const row = document.createElement("article");
+      row.className = "event-row";
+      const version = document.createElement("div");
+      version.className = "event-version";
+      version.textContent = `v${event.version}`;
+      const dot = document.createElement("div");
+      dot.className = "event-dot";
+      const card = document.createElement("div");
+      card.className = "event-card";
+      const top = document.createElement("div");
+      top.className = "event-top";
+      const type = document.createElement("span");
+      type.className = "event-type";
+      type.textContent = TYPE_LABELS[event.type] || event.type;
+      const sourceName = document.createElement("span");
+      sourceName.className = "event-source";
+      sourceName.textContent = event.source || "unknown";
+      const summary = document.createElement("div");
+      summary.className = "event-summary";
+      summary.textContent = eventSummary(event);
+      top.append(type, sourceName);
+      card.append(top, summary);
+      row.append(version, dot, card);
+      row.addEventListener("click", () => {
+        ui.rawJson.textContent = JSON.stringify(event, null, 2);
+        ui.rawPanel.open = true;
+      });
+      ui.timeline.appendChild(row);
+      ui.timeline.scrollTop = ui.timeline.scrollHeight;
+
+      applyEventToCards(event);
+    }
+
+    function applyEventToCards(event) {
+      const c = event.content || {};
+      if (event.type === "task_posted") {
+        ui.taskStatus.textContent = "posted";
+      } else if (event.type === "bid_round_opened") {
+        ui.taskStatus.textContent = "bidding";
+      } else if (event.type === "bid") {
+        const id = c.device_id;
+        if (!["dog-a", "dog-b"].includes(id)) return;
+        const offer = (c.offers || [])[0] || {};
+        const metrics = offer.metrics || {};
+        const proposal = c.proposal || {};
+        const badge = document.getElementById(`badge-${id}`);
+        badge.textContent = offer.decision || "未知";
+        badge.className = `badge ${offer.decision === "accept" ? "accept" : ""}`;
+        document.getElementById(`battery-${id}`).textContent = formatNumber(metrics.battery_margin);
+        document.getElementById(`reliability-${id}`).textContent = formatPercent(metrics.reliability);
+        document.getElementById(`confidence-${id}`).textContent = formatPercent(proposal.confidence);
+      } else if (event.type === "task_assigned") {
+        const assignment = (c.assignments || [])[0] || {};
+        const id = assignment.device_id || "—";
+        ui.winner.textContent = id;
+        ui.assignedDevice.textContent = id;
+        ui.taskStatus.textContent = "assigned";
+        if (document.getElementById(`agent-${id}`)) document.getElementById(`agent-${id}`).classList.add("winner");
+      } else if (event.type === "action_intent") {
+        ui.taskStatus.textContent = "running";
+        ui.actionDevice.textContent = c.device_id || "—";
+        ui.actionVerb.textContent = c.verb || "—";
+        ui.safetyState.textContent = "R0 放行中";
+      } else if (event.type === "receipt") {
+        ui.receiptState.textContent = c.success ? "success / confirmed" : "failed";
+        ui.receiptState.className = `fact-value ${c.success ? "success" : "error"}`;
+        ui.safetyState.textContent = c.post_check_allowed ? "R0 已通过" : "已拦截";
+      } else if (event.type === "task_done") {
+        ui.taskStatus.textContent = "done";
+        ui.taskStatus.className = "metric-value success";
+        updateFlow("memory_cleaned");
+      }
+    }
+
+    function applyResult(result) {
+      ui.rawJson.textContent = JSON.stringify(result, null, 2);
+      ui.modelName.textContent = `${result.runtime.model} · ${result.runtime.process_mode}`;
+      ui.taskStatus.textContent = result.task.status;
+      ui.winner.textContent = result.task.winner;
+      ui.assignedDevice.textContent = result.task.winner;
+      const group = result.coordination || {};
+      const candidate = group.group_candidate || {};
+      ui.groupReason.textContent = candidate.rationale_summary || "已使用确定性匹配兜底。";
+      ui.candidateMatch.textContent = group.group_candidate_matches_committed ? "是" : "否 / fallback";
+      ui.candidateMatch.className = `fact-value ${group.group_candidate_matches_committed ? "success" : ""}`;
+      const cleared = Object.values(result.completion.agent_task_sessions_cleared || {}).every(Boolean);
+      if (cleared) {
+        updateFlow("memory_cleaned");
+        const node = ui.flow.querySelector('[data-type="memory_cleaned"]');
+        if (node) node.classList.add("done");
+      }
+    }
+
+    function addLLMCall(call) {
+      if (llmCalls.length === 0) ui.llmRows.replaceChildren();
+      llmCalls.push(call);
+      const row = document.createElement("tr");
+      const values = [
+        String(llmCalls.length),
+        OPERATION_LABELS[call.operation] || call.operation || "模型调用",
+        call.model || "—",
+        tokenText(call.input_tokens),
+        tokenText(call.output_tokens),
+        tokenText(call.total_tokens),
+        durationText(call.duration_ms)
+      ];
+      values.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if (index === 1) cell.className = "llm-operation";
+        row.appendChild(cell);
+      });
+      const statusCell = document.createElement("td");
+      const status = document.createElement("span");
+      status.className = `llm-status ${call.status === "ok" ? "" : "failed"}`;
+      status.textContent = call.status === "ok" ? "成功" : "失败";
+      statusCell.appendChild(status);
+      row.appendChild(statusCell);
+      row.addEventListener("click", () => {
+        ui.rawJson.textContent = JSON.stringify(call, null, 2);
+        ui.rawPanel.open = true;
+      });
+      ui.llmRows.appendChild(row);
+
+      const totalTokens = llmCalls.reduce(
+        (sum, item) => sum + (typeof item.total_tokens === "number" ? item.total_tokens : 0),
+        0
+      );
+      const totalDuration = llmCalls.reduce(
+        (sum, item) => sum + (typeof item.duration_ms === "number" ? item.duration_ms : 0),
+        0
+      );
+      ui.llmCallCount.textContent = String(llmCalls.length);
+      ui.llmTotalTokens.textContent = String(totalTokens);
+      ui.llmTotalDuration.textContent = durationText(totalDuration);
+    }
+
+    function addSessionSnapshot(snapshot) {
+      const deviceId = snapshot.device_id;
+      if (!["dog-a", "dog-b"].includes(deviceId)) return;
+
+      const history = document.getElementById(`sessionHistory-${deviceId}`);
+      const stateNode = document.getElementById(`sessionState-${deviceId}`);
+      const empty = history.querySelector(".session-empty");
+      if (empty) empty.remove();
+      history.querySelectorAll("details").forEach(item => {
+        item.open = false;
+      });
+
+      const exists = snapshot.exists === true && snapshot.session;
+      const phaseLabel = SESSION_PHASE_LABELS[snapshot.phase] || snapshot.phase || "运行时快照";
+      const sessionState = exists ? (snapshot.session.state || "存在") : "已清理";
+      const sessionVersion = exists && snapshot.session.session_version != null
+        ? ` · v${snapshot.session.session_version}`
+        : "";
+
+      stateNode.textContent = sessionState;
+      const details = document.createElement("details");
+      details.className = `session-snapshot${exists ? "" : " cleared"}`;
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${phaseLabel} · ${sessionState}${sessionVersion}`;
+      const content = document.createElement("pre");
+      content.textContent = JSON.stringify(snapshot, null, 2);
+      details.append(summary, content);
+      history.appendChild(details);
+    }
+
+    function handleMessage(message) {
+      const data = message.data || {};
+      if (message.kind === "status") {
+        ui.stageText.textContent = data.message || data.stage;
+      } else if (message.kind === "llm_call") {
+        addLLMCall(data);
+      } else if (message.kind === "agent_session") {
+        addSessionSnapshot(data);
+      } else if (message.kind === "blackboard_event") {
+        addEvent(data);
+      } else if (message.kind === "result") {
+        applyResult(data);
+        ui.stageText.textContent = "闭环完成：任务已到达 TASK_DONE，临时任务内存已清理。";
+        finishConnection("运行完成");
+      } else if (message.kind === "error") {
+        ui.stageText.textContent = data.message || "运行失败";
+        ui.stageText.classList.add("error");
+        ui.taskStatus.textContent = "error";
+        ui.taskStatus.className = "metric-value error";
+        finishConnection("运行失败");
+      }
+    }
+
+    async function startRun() {
+      const instruction = ui.instruction.value.trim();
+      if (!instruction) return;
+      if (source) source.close();
+      resetUI();
+      ui.runButton.disabled = true;
+      ui.stageText.classList.remove("error");
+      ui.stageText.textContent = "正在创建运行实例…";
+      ui.connection.classList.add("connected");
+      ui.connectionText.textContent = "连接中";
+      try {
+        const response = await fetch("/api/runs", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({instruction})
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.message || body.error || "无法启动任务");
+        ui.runId.textContent = `run ${body.run_id.slice(0, 8)}`;
+        source = new EventSource(`${body.events_url}?since=0`);
+        source.onopen = () => {
+          ui.connection.classList.add("connected");
+          ui.connectionText.textContent = "实时连接";
+        };
+        source.onmessage = event => handleMessage(JSON.parse(event.data));
+        source.onerror = () => {
+          if (ui.runButton.disabled) ui.connectionText.textContent = "流已关闭";
+          source.close();
+        };
+      } catch (error) {
+        ui.stageText.textContent = error.message;
+        ui.stageText.classList.add("error");
+        finishConnection("启动失败");
+      }
+    }
+
+    function finishConnection(label) {
+      ui.runButton.disabled = false;
+      ui.connection.classList.remove("connected");
+      ui.connectionText.textContent = label;
+      if (source) source.close();
+    }
+
+    function formatNumber(value) {
+      return typeof value === "number" ? value.toFixed(2) : "—";
+    }
+
+    function formatPercent(value) {
+      return typeof value === "number" ? `${Math.round(value * 100)}%` : "—";
+    }
+
+    function tokenText(value) {
+      return typeof value === "number" ? String(value) : "—";
+    }
+
+    function durationText(value) {
+      if (typeof value !== "number") return "—";
+      return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(0)} ms`;
+    }
+
+    ui.runButton.addEventListener("click", startRun);
+    ui.instruction.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !ui.runButton.disabled) startRun();
+    });
+    renderFlow();
+  </script>
+</body>
+</html>

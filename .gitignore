@@ -7,3 +7,12 @@ llm/.env.local
 # Python bytecode caches
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local runtime state and secrets.
+runtime_data/
+.env
+.env.*
+!.env.example

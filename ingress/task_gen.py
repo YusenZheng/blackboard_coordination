@@ -21,7 +21,8 @@ import abc
 import copy
 import json
 import math
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
+from typing import Protocol
 
 from ..contracts.interfaces import RegistryPort
 from ..contracts.task import TaskPackage
@@ -70,6 +71,14 @@ SUPPORTED_AUTONOMY_LEVELS = frozenset(
 SUPPORTED_PRIORITIES = frozenset(item.value for item in PRIORITY_CATALOG)
 
 
+class IntentInterpreterPort(Protocol):
+    """自然语言意图解释器；具体 LLM 实现由 runtime 注入。"""
+
+    def interpret(self, raw_input: str, sequence: int) -> dict:
+        """返回经过结构化校验的任务草案，不负责写黑板。"""
+        ...
+
+
 class EnrichmentAgent(abc.ABC):
     """补全 Agent 接口位:各带记忆补一块。"""
     name: str = "enrich"
@@ -103,12 +112,28 @@ class _MockWeatherAgent(EnrichmentAgent):
 class TaskGen:
     def __init__(
         self,
-        llm_config: LLMConfig | None = None,
+        llm_config: LLMConfig | IntentInterpreterPort | None = None,
         registry: RegistryPort | None = None,
+        *,
+        intent_interpreter: IntentInterpreterPort | None = None,
     ):
         # 补全 Agent 群(MVP 三个 mock;真上接六类预设)
         self._enrichers = [_MockPetAgent(), _MockSpaceAgent(), _MockWeatherAgent()]
-        self._llm_config = llm_config or LLMConfig.from_env()
+        positional_interpreter = (
+            llm_config
+            if callable(getattr(llm_config, "interpret", None))
+            else None
+        )
+        if positional_interpreter is not None and intent_interpreter is not None:
+            raise TypeError(
+                "intent_interpreter was provided both positionally and by keyword"
+            )
+        self._intent_interpreter = intent_interpreter or positional_interpreter
+        self._llm_config = (
+            LLMConfig.from_env()
+            if positional_interpreter is not None
+            else llm_config or LLMConfig.from_env()
+        )
         self._registry = registry
         self._seq = 0
 
@@ -118,9 +143,14 @@ class TaskGen:
         media: str | None = None,
     ) -> TaskPackage:
         self._validate_media(media)
+        self._seq += 1
+        if self._intent_interpreter is not None:
+            draft = self._intent_interpreter.interpret(raw_input, self._seq)
+            self._validate_draft(draft)
+            return self._task_from_interpreted_draft(draft)
+
         device_context = self._online_capable_device_context()
         # ① 意图理解:真 LLM 从候选 task_type 中选择,输出原有 draft 三字段
-        self._seq += 1
         draft = self._intent(raw_input, self._seq, media=media)
         # ② 补全 Agent 群
         for ea in self._enrichers:
@@ -162,6 +192,56 @@ class TaskGen:
             extra=validated["extra"],
         )
 
+    def _task_from_interpreted_draft(self, draft: dict) -> TaskPackage:
+        """把 runtime 注入的结构化草案转换成兼容 coordination v2 的任务包。"""
+        for enricher in self._enrichers:
+            draft.update(enricher.enrich(draft))
+
+        mode = str(draft.get("mode") or "autonomous")
+        autonomy = str(draft.get("initial_autonomy_level") or "A1")
+        required_capabilities = list(
+            draft.get("required_capability_ids") or ["G01"]
+        )
+        role_slots = list(draft.get("role_slots") or self._default_role_slots())
+        area_value = draft.get("area") or {"label": "公园", "area": "公园"}
+        if not isinstance(area_value, dict):
+            raise ValueError("intent draft area must be an object")
+        area = self._parse_position(area_value)
+
+        min_battery = float(draft.get("min_battery", 0.2))
+        if not 0.0 <= min_battery <= 1.0:
+            raise ValueError("intent draft min_battery must be between 0.0 and 1.0")
+
+        space_constraints = self._parse_space_constraints(
+            draft.get("space_constraints", [])
+        )
+        return TaskPackage(
+            task_id=draft["task_id"],
+            task_type=draft["task_type"],
+            goal=draft["goal"],
+            success_condition=str(
+                draft.get("success_condition") or "目标被近距离确认"
+            ),
+            safety_constraints=list(draft.get("safety_constraints") or []),
+            requirement=TaskRequirement(
+                required_capabilities=required_capabilities,
+                min_battery=min_battery,
+                space_constraints=space_constraints,
+            ),
+            target_profile=copy.deepcopy(draft.get("target_profile", {})),
+            area=area,
+            priority=str(draft.get("priority") or "high"),
+            initial_autonomy_level=autonomy,
+            extra={
+                "mode": mode,
+                "weather": copy.deepcopy(draft.get("weather")),
+                "space_constraints": copy.deepcopy(
+                    draft.get("space_constraints", [])
+                ),
+                "role_slots": role_slots,
+            },
+        )
+
     def generate_old(
         self,
         raw_input: str = DEFAULT_RAW_INPUT,
@@ -171,23 +251,7 @@ class TaskGen:
         # ① 意图理解(MVP:识别"找X" → search_target)
         self._seq += 1
         draft = self._intent_old(raw_input, self._seq)
-        # ② 补全 Agent 群
-        for ea in self._enrichers:
-            draft.update(ea.enrich(draft))
-        # ③ 路由打标 → 挡位 + 初始信任等级
-        # MVP 占位:开放环境找目标、需多机分工 → 分布式自主应征(autonomous);执行前人批(A1)。
-        # TODO:接三标签([目标清晰度][环境开放度][风险等级])+ 在线设备数真判定,别用返回同值的假分支冒充。
-        mode, autonomy = "autonomous", "A1"
-        draft["mode"] = mode
-        return TaskPackage(
-            task_id=draft["task_id"], task_type=draft["task_type"], goal=draft["goal"],
-            success_condition="目标被近距离确认",
-            requirement=TaskRequirement(required_capabilities=["G01"], min_battery=0.2),
-            target_profile=draft.get("target_profile", {}),
-            area=Position(label="公园", area="公园"),
-            priority="high", initial_autonomy_level=autonomy,
-            extra={"mode": mode, "weather": draft.get("weather"),
-                   "space_constraints": draft.get("space_constraints")})
+        return self._task_from_interpreted_draft(draft)
 
     @staticmethod
     def _intent_old(raw: str, seq: int) -> dict:
@@ -820,3 +884,63 @@ class TaskGen:
             )
         if not isinstance(result["goal"], str) or not result["goal"].strip():
             raise LLMCallError("intent goal must be a non-empty string")
+
+    @staticmethod
+    def _validate_draft(draft: dict) -> None:
+        if not isinstance(draft, dict):
+            raise TypeError("intent interpreter must return an object")
+        for field_name in ("task_id", "task_type", "goal"):
+            value = draft.get(field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"intent draft requires {field_name}")
+        if "role_slots" in draft and not isinstance(draft["role_slots"], list):
+            raise ValueError("intent draft role_slots must be a list")
+
+    @staticmethod
+    def _default_role_slots() -> list[dict]:
+        return [
+            {
+                "slot_id": "searcher",
+                "required_capability_ids": ["search"],
+                "exclusive": True,
+                "allowed_actions": ["move_to"],
+                "action_template": {
+                    "verb": "move_to",
+                    "params": {"target": "search-area"},
+                    "reversible": True,
+                },
+                "completion_rule": {
+                    "kind": "receipt_success",
+                    "required_result_fields": [],
+                },
+            }
+        ]
+
+
+def task_package_to_v2_content(
+    task: TaskPackage, *, task_revision: int = 1
+) -> dict:
+    """把入口层任务包转换为 coordination v2 的 TASK_POSTED payload。"""
+
+    if task_revision < 1:
+        raise ValueError("task_revision must be >= 1")
+    requirement = asdict(task.requirement) if task.requirement is not None else {}
+    return {
+        "schema_version": 2,
+        "task_id": task.task_id,
+        "task_revision": task_revision,
+        "task_type": task.task_type,
+        "goal": task.goal,
+        "success_condition": task.success_condition,
+        "priority": task.priority,
+        "initial_autonomy_level": task.initial_autonomy_level,
+        "requirement": requirement,
+        "target_profile": dict(task.target_profile),
+        "area": asdict(task.area) if task.area is not None else None,
+        "role_slots": list(task.extra.get("role_slots", [])),
+        "extra": {
+            key: value
+            for key, value in task.extra.items()
+            if key != "role_slots"
+        },
+    }

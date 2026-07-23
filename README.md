@@ -24,20 +24,29 @@ python -m pip install pytest
 
 ## 快速开始
 
-```bash
+```powershell
 cd swarm_brain
 
-# 1. 运行 walking skeleton —— 四条核心链路(推荐从这里入门)
-python -m swarm_brain.runtime.skeleton
+# 1. 本地配置 DeepSeek
+powershell -ExecutionPolicy Bypass -File .\scripts\configure_deepseek.ps1
 
-# 2. 跑评测基线用例,输出一次基线报告
-python -m eval.runner
+# 2. 连接检查
+python -m swarm_brain.runtime.deepseek_healthcheck
 
-# 3. 冒烟测试
-pytest tests/
+# 3. 一次运行完整 coordination v2 闭环
+python -m swarm_brain.runtime "帮我找公园里走失的白色萨摩耶"
+
+# 4. 启动本地实时看板
+python -m swarm_brain.runtime.dashboard_server
+# 浏览器访问 http://127.0.0.1:8765
+
+# 5. 离线回归测试
+python -m unittest discover -s runtime/tests -v
 ```
 
-三条命令均可直接运行。`skeleton` 是理解整个系统最快的入口——它把六层串起来跑一遍,打印每一步在做什么。
+正式入口依次完成意图识别、双设备竞标、群体判给、受限动作、回执和任务终态。
+`python -m swarm_brain.runtime.skeleton` 保留为旧版 v1 walking skeleton，仅用于兼容和
+理解早期六层结构，不作为 coordination v2 主入口。
 
 ### 可选:前台接口(HTTP)
 
@@ -72,7 +81,7 @@ swarm_brain/
   ingress/      北向入口:任务生成流水线 + 事件接入 + 三出向接口。
   llm/          大模型配置:连接信息 + 生成参数(不绑定具体厂商 SDK)。
   memory/       记忆:私有记忆 + 共享事实库(接口已定义,实现待补)。
-  runtime/      Harness 装配 + walking skeleton。
+  runtime/      coordination v2 正式装配入口 + 旧版 walking skeleton。
 sim/            仿真:可通过性引擎 + 仿真适配器 + 网格桩(独立顶层)。
 eval/           评测:用例 + 指标 + 基线报告(独立顶层)。
 api/            前台接口:FastAPI 端点(可选)。
@@ -91,7 +100,7 @@ tests/          冒烟测试。
 | 北向入口   | `ingress/`            | task_gen(三段流水线)/ event_ingress / interfaces_out                  |
 | 大模型配置  | `llm/`                | 统一管理模型连接信息与生成参数，不保存密钥、不绑定具体厂商 SDK                         |
 | 记忆     | `memory/`             | 私有记忆 + 事实库(接口位)                                                  |
-| 运行时    | `runtime/`            | harness(装配)/ skeleton                                            |
+| 运行时    | `runtime/`            | CoordinationRuntime / DeepSeek adapters / 旧版 skeleton            |
 | 独立顶层   | `sim/` `eval/` `api/` | 仿真 / 评测 / 前台接口                                                   |
 
 
@@ -104,7 +113,7 @@ tests/          冒烟测试。
 
 
 
-## walking skeleton 演示什么
+## 旧版 walking skeleton 演示什么
 
 `python -m swarm_brain.runtime.skeleton` 依次跑四条链路:
 

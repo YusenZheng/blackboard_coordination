@@ -30,6 +30,20 @@ def safe_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _storage_root(root: str | Path) -> Path:
+    """Resolve a storage root and opt into extended-length paths on Windows."""
+    resolved = Path(root).resolve()
+    if os.name != "nt":
+        return resolved
+
+    value = str(resolved)
+    if value.startswith("\\\\?\\"):
+        return resolved
+    if value.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + value[2:])
+    return Path("\\\\?\\" + value)
+
+
 def _atomic_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -119,7 +133,7 @@ class FileOutboxStore:
     """A process-private durable outbox plus consumer offset."""
 
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root).resolve()
+        self.root = _storage_root(root)
         self.outbox_root = self.root / "outbox"
         self.consumer_file = self.root / "consumer.json"
         self._lock = threading.RLock()
