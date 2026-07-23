@@ -263,6 +263,7 @@ class BidPayload:
     offers: list[BidOffer]
     proposal: Optional[CollaborationProposal]
     expires_at: float
+    skill_references: list[SkillReference] = field(default_factory=list)
     schema_version: int = SCHEMA_VERSION
 
 
@@ -284,6 +285,7 @@ class AssignmentSnapshot:
     allowed_actions: list[str]
     action_template: dict[str, Any]
     completion_rule: dict[str, Any]
+    skill_references: list[SkillReference] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "AssignmentSnapshot":
@@ -296,6 +298,11 @@ class AssignmentSnapshot:
             allowed_actions=[enum_value(item) for item in value.get("allowed_actions", [])],
             action_template=dict(value.get("action_template", {})),
             completion_rule=dict(value.get("completion_rule", {})),
+            skill_references=[
+                SkillReference.from_dict(item)
+                for item in value.get("skill_references", [])
+                if isinstance(item, dict)
+            ],
         )
 
 
@@ -398,6 +405,20 @@ class SkillReference:
     source_ref: str
     tool_chain: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "SkillReference":
+        return cls(
+            skill_id=str(value.get("skill_id", "")),
+            version=str(value.get("version", "")),
+            title=str(value.get("title", "")),
+            strategy_summary=str(value.get("strategy_summary", "")),
+            applicable_conditions=[
+                str(item) for item in value.get("applicable_conditions", [])
+            ],
+            source_ref=str(value.get("source_ref", "")),
+            tool_chain=[str(item) for item in value.get("tool_chain", [])],
+        )
+
 
 @dataclass
 class IntentSession:
@@ -443,6 +464,7 @@ class SubmitActionIntentPayload:
     step: int
     attempt: int
     intent_fingerprint: str
+    skill_references: list[SkillReference] = field(default_factory=list)
 
 
 @dataclass
@@ -564,6 +586,7 @@ def intent_context(payload: SubmitActionIntentPayload) -> dict[str, Any]:
         "step": payload.step,
         "attempt": payload.attempt,
         "intent_fingerprint": payload.intent_fingerprint,
+        "skill_references": to_json_value(payload.skill_references),
     }
 
 

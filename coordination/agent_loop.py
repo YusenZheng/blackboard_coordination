@@ -211,6 +211,7 @@ class PureAgentLoop:
             deadline=float(content["deadline"]),
             now=loop_input.now,
             proposal=loop_input.local_proposal,
+            skill_references=loop_input.skill_references,
         )
         event = make_blackboard_event(
             CoordinationEventType.BID,

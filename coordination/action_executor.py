@@ -25,6 +25,7 @@ from .models import (
     intent_context,
     make_blackboard_event,
     receipt_from_unknown,
+    to_json_value,
 )
 from .ports import PhysicalActionGatewayPort, SafetyPort
 
@@ -57,6 +58,7 @@ class DeterministicActionPolicy:
         assignment,
     ) -> SubmitActionIntentPayload:
         candidate = self.candidate(assignment)
+        skill_references = list(getattr(assignment, "skill_references", []))
         step = 0
         attempt = 1
         intent_id = (
@@ -77,6 +79,7 @@ class DeterministicActionPolicy:
             "reversible": candidate.reversible,
             "step": step,
             "attempt": attempt,
+            "skill_references": to_json_value(skill_references),
         }
         intent_fingerprint = fingerprint(base)
         intent = ActionIntent(
@@ -95,6 +98,7 @@ class DeterministicActionPolicy:
                 "step": step,
                 "attempt": attempt,
                 "intent_fingerprint": intent_fingerprint,
+                "skill_references": to_json_value(skill_references),
             },
         )
         return SubmitActionIntentPayload(
@@ -107,6 +111,7 @@ class DeterministicActionPolicy:
             step=step,
             attempt=attempt,
             intent_fingerprint=intent_fingerprint,
+            skill_references=skill_references,
         )
 
 
@@ -230,6 +235,7 @@ class ActionExecutor:
             "step": payload.step,
             "attempt": payload.attempt,
             "intent_fingerprint": payload.intent_fingerprint,
+            "skill_references": to_json_value(payload.skill_references),
         }
         return make_blackboard_event(
             CoordinationEventType.ACTION_INTENT,

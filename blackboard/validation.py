@@ -246,6 +246,10 @@ def _validate_bid(content: dict[str, Any]) -> Optional[str]:
         error = _validate_proposal(proposal)
         if error is not None:
             return error
+    if "skill_references" in content:
+        error = _validate_skill_references(content["skill_references"])
+        if error is not None:
+            return error
     return None
 
 
@@ -270,6 +274,43 @@ def _validate_proposal(proposal: Any) -> Optional[str]:
         return "BID_PROPOSAL_CONFIDENCE_INVALID"
     if not 0.0 <= float(proposal["confidence"]) <= 1.0:
         return "BID_PROPOSAL_CONFIDENCE_OUT_OF_RANGE"
+    return None
+
+
+def _validate_skill_references(value: Any) -> Optional[str]:
+    if not isinstance(value, list):
+        return "SKILL_REFERENCES_TYPE_INVALID"
+    expected = {
+        "skill_id",
+        "version",
+        "title",
+        "strategy_summary",
+        "applicable_conditions",
+        "source_ref",
+        "tool_chain",
+    }
+    identities: set[tuple[str, str]] = set()
+    for reference in value:
+        if not isinstance(reference, dict) or set(reference) != expected:
+            return "SKILL_REFERENCE_FIELDS_INVALID"
+        for field_name in (
+            "skill_id",
+            "version",
+            "title",
+            "strategy_summary",
+            "source_ref",
+        ):
+            if not isinstance(reference[field_name], str):
+                return "SKILL_REFERENCE_STRING_INVALID"
+        if not reference["skill_id"] or not reference["version"] or not reference["source_ref"]:
+            return "SKILL_REFERENCE_IDENTITY_REQUIRED"
+        for field_name in ("applicable_conditions", "tool_chain"):
+            if not _is_string_list(reference[field_name]):
+                return "SKILL_REFERENCE_LIST_INVALID"
+        identity = (reference["skill_id"], reference["version"])
+        if identity in identities:
+            return "SKILL_REFERENCE_DUPLICATE"
+        identities.add(identity)
     return None
 
 
@@ -317,6 +358,10 @@ def _validate_assignment(assignment: Any) -> Optional[str]:
     for field_name in ("action_template", "completion_rule"):
         if not isinstance(assignment.get(field_name), dict):
             return f"ASSIGNMENT_{field_name.upper()}_INVALID"
+    if "skill_references" in assignment:
+        error = _validate_skill_references(assignment["skill_references"])
+        if error is not None:
+            return error
     return None
 
 
@@ -352,6 +397,10 @@ def _validate_action_intent(content: dict[str, Any]) -> Optional[str]:
         return "STEP_UNSUPPORTED"
     if content.get("attempt") != 1 or type(content.get("attempt")) is not int:
         return "ATTEMPT_UNSUPPORTED"
+    if "skill_references" in content:
+        error = _validate_skill_references(content["skill_references"])
+        if error is not None:
+            return error
     return None
 
 

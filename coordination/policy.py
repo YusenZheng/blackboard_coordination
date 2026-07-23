@@ -21,6 +21,7 @@ from .models import (
     InvalidPlan,
     PlanValidationResult,
     RoleSlot,
+    SkillReference,
     ValidPlan,
     Violation,
     enum_value,
@@ -52,6 +53,7 @@ class EligibilityBidEngine:
         deadline: float,
         now: float,
         proposal: Optional[CollaborationProposal],
+        skill_references: Optional[list[SkillReference]] = None,
     ) -> BidPayload:
         offers = [
             self.evaluate_slot(
@@ -72,6 +74,7 @@ class EligibilityBidEngine:
             offers=offers,
             proposal=proposal,
             expires_at=deadline,
+            skill_references=list(skill_references or []),
         )
 
     def evaluate_slot(
@@ -356,6 +359,11 @@ class MinimalPlanValidator:
                     allowed_actions=list(slot.allowed_actions),
                     action_template=dict(slot.action_template),
                     completion_rule=dict(slot.completion_rule),
+                    skill_references=list(
+                        bid_by_event[
+                            assignment.supporting_bid_event_id
+                        ].payload.skill_references
+                    ),
                 )
             )
 
@@ -451,6 +459,11 @@ def parse_bid_record(value: dict[str, Any]) -> BidRecord:
         offers=offers,
         proposal=proposal,
         expires_at=float(payload_value["expires_at"]),
+        skill_references=[
+            SkillReference.from_dict(item)
+            for item in payload_value.get("skill_references", [])
+            if isinstance(item, dict)
+        ],
         schema_version=int(payload_value.get("schema_version", 2)),
     )
     return BidRecord(

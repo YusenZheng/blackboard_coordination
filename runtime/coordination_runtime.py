@@ -463,6 +463,9 @@ class CoordinationRuntime:
                     device_id: {
                         "offers": record["payload"]["offers"],
                         "proposal": record["payload"].get("proposal"),
+                        "skill_references": record["payload"].get(
+                            "skill_references", []
+                        ),
                     }
                     for device_id, record in bids.items()
                 },
