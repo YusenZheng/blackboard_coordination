@@ -70,12 +70,50 @@ class SkillGraph:
     def all(self) -> list:
         return list(self._skills.values())
 
+    def search(
+        self,
+        *,
+        task_type: str,
+        situation_tags: list[str],
+        capability_ids: list[str],
+        available_tool_ids: set[str],
+        limit: int = 3,
+    ) -> list[Skill]:
+        """按任务、情境、能力与当前可用 Tool 返回可执行的经验参考。"""
+        query_tags = set(situation_tags)
+        query_capabilities = set(capability_ids)
+        matches: list[tuple[int, Skill]] = []
+        for skill in self._skills.values():
+            trigger = skill.trigger
+            expected_task_type = trigger.get("task_type")
+            if expected_task_type and expected_task_type != task_type:
+                continue
+            expected_situation = trigger.get("situation")
+            if expected_situation and expected_situation not in query_tags:
+                continue
+            expected_capabilities = set(trigger.get("capability_ids", []))
+            if expected_capabilities and not expected_capabilities <= query_capabilities:
+                continue
+            if skill.tool_chain and not set(skill.tool_chain) <= available_tool_ids:
+                continue
+
+            score = 0
+            score += 4 if expected_task_type == task_type else 0
+            score += 2 if expected_situation in query_tags else 0
+            score += len(expected_capabilities & query_capabilities)
+            matches.append((score, skill))
+        matches.sort(key=lambda item: (-item[0], item[1].signature))
+        return [skill for _, skill in matches[: max(0, limit)]]
+
 
 def load_builtin_skills() -> SkillGraph:
     """加载内置 Skill(骨架只挂 1 样例;后续补的 Skill 也在这里挂)。"""
     g = SkillGraph()
     from .skills.fanshaped_search import FANSHAPED_SEARCH
+    from .skills.safe_search_execution import SAFE_SEARCH_EXECUTION
+
     g.register(FANSHAPED_SEARCH)
+    g.register(SAFE_SEARCH_EXECUTION)
     # TODO:照 fanshaped_search 补 多源线索定位/跨设备视觉接力/物理约束匹配/
     #   低电补位(L1)+ 抢道让位钳形分工/边缘躲藏预判(L2,过 Y07 验证注册)
     return g

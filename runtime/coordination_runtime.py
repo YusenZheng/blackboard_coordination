@@ -10,12 +10,18 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from ..access.adapters.mock_adapter import MockAdapter
+from ..access.registry import Registry
+from ..access.tool_gateway import ToolGateway
+from ..access.tools.base import load_builtin_tools
+from ..assets.skill import load_builtin_skills
 from ..blackboard.board import Blackboard
+from ..contracts.agent_card import AgentCard, CapabilitySlot
 from ..contracts.blackboard_event import Ledger
+from ..contracts.types import CapabilityProfile, DeviceRef, DeviceState, DeviceType
+from ..contracts.verbs import ActionVerb
 from ..coordination.action_executor import ActionExecutor
 from ..coordination.adapters import (
-    MockPhysicalActionGateway,
-    NullSkillReferenceProvider,
     StaticSafetyPort,
 )
 from ..coordination.agent_loop import PureAgentLoop
@@ -50,6 +56,7 @@ from .deepseek import (
     DeepSeekIntentInterpreter,
     DeepSeekLocalProposalPolicy,
 )
+from .skill_reference_provider import AssetSkillReferenceProvider
 
 
 @dataclass(frozen=True)
@@ -242,6 +249,7 @@ class CoordinationRuntime:
         )
 
         observed_group = ObservedGroupPlanningPolicy(self.group_policy)
+        tool_traces: list[dict] = []
         with tempfile.TemporaryDirectory(
             prefix="swarmbrain-coordination-"
         ) as work_root:
@@ -252,7 +260,7 @@ class CoordinationRuntime:
                 bid_window_s=self.bid_window_s,
                 group_policy_timeout_s=self.llm_config.timeout_seconds,
             )
-            hosts = self._build_hosts(client, work_root)
+            hosts = self._build_hosts(client, work_root, tool_traces.append)
 
             _notify(
                 status_listener,
@@ -428,7 +436,7 @@ class CoordinationRuntime:
                 "process_mode": "single_process_in_memory",
                 "provider": self.llm_config.provider,
                 "model": self.llm_config.model,
-                "physical_gateway": "mock",
+                "physical_gateway": "tool_runtime+mock_adapter",
                 "device_ids": [item.device_id for item in self.devices],
             },
             "task": {
@@ -465,6 +473,7 @@ class CoordinationRuntime:
                 "intent": intents.get(intent_id) if intent_id else None,
                 "receipt": receipts.get(intent_id) if intent_id else None,
                 "safety_intercepts": action_view["intercepts_by_intent"],
+                "tool_traces": tool_traces,
             },
             "completion": {
                 "coordinator_processed_events": terminal_events_processed,
@@ -493,11 +502,47 @@ class CoordinationRuntime:
         return result
 
     def _build_hosts(
-        self, client: BlackboardClient, work_root: str
+        self,
+        client: BlackboardClient,
+        work_root: str,
+        tool_trace_listener: Optional[RuntimeListener] = None,
     ) -> dict[str, AgentProcessHost]:
+        registry = Registry()
+        for device in self.devices:
+            registry.register(
+                AgentCard(
+                    identity=DeviceRef(device.device_id, DeviceType.DOG),
+                    state=DeviceState(
+                        battery=device.battery,
+                        endurance_s=device.endurance_s,
+                        online=True,
+                        healthy=True,
+                    ),
+                    capability=CapabilitySlot(
+                        action_verbs=[
+                            ActionVerb(value) for value in device.action_verbs
+                        ],
+                        atomic_tools=["G01"],
+                        profile=CapabilityProfile(
+                            capabilities=list(device.capabilities),
+                            width_cm=40,
+                        ),
+                    ),
+                )
+            )
+        catalog = load_builtin_tools()
+        skill_provider = AssetSkillReferenceProvider(
+            load_builtin_skills(), catalog
+        )
         hosts: dict[str, AgentProcessHost] = {}
         for device in self.devices:
-            gateway = MockPhysicalActionGateway()
+            gateway = ToolGateway(
+                adapters={device.device_id: MockAdapter(device.device_id)},
+                tool_registry=catalog,
+                device_registry=registry,
+                blackboard=client,
+                trace_listener=tool_trace_listener,
+            )
             local_policy = self.local_policy_factory(device.device_id)
             hosts[device.device_id] = AgentProcessHost(
                 spec=AgentProcessSpec(
@@ -515,7 +560,7 @@ class CoordinationRuntime:
                     gateway=gateway,
                 ),
                 action_gateway=gateway,
-                skill_provider=NullSkillReferenceProvider(),
+                skill_provider=skill_provider,
                 local_proposal_policy=local_policy,
             )
         return hosts

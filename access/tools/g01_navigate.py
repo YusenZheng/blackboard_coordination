@@ -9,6 +9,7 @@ mock 实现:print 一下、返回到达状态。真实现由适配器接(见 ada
 """
 from __future__ import annotations
 
+from ...contracts.verbs import ActionVerb
 from .base import ToolSpec
 
 
@@ -43,4 +44,6 @@ G01_NAVIGATE = ToolSpec(
     },
     reuse_events=["E05", "E12", "E13", "E15", "E17"],
     run=_run_g01,
+    executor_type="device",
+    action_verb=ActionVerb.MOVE_TO.value,
 )
