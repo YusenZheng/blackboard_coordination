@@ -1,8 +1,8 @@
 """Formal coordination-v2 runtime assembly.
 
 This module wires the existing ingress, Blackboard, coordination, safety and
-access ports into one complete task run.  It is the supported demo entrypoint;
-the legacy ``runtime.skeleton`` remains only for v1 compatibility.
+access ports into one complete task run. ``runtime.skeleton`` is the public
+entrypoint and delegates its default execution here.
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ from ..ingress.task_gen import (
     TaskGen,
     task_package_to_v2_content,
 )
+from ..llm import LLMConfig
 from .deepseek import (
     DeepSeekClient,
-    DeepSeekConfig,
     DeepSeekGroupPlanningPolicy,
     DeepSeekIntentInterpreter,
     DeepSeekLocalProposalPolicy,
@@ -128,7 +128,7 @@ class CoordinationRuntime:
     def __init__(
         self,
         *,
-        deepseek_config: Optional[DeepSeekConfig] = None,
+        llm_config: Optional[LLMConfig] = None,
         intent_interpreter: Optional[IntentInterpreterPort] = None,
         local_policy_factory: Optional[LocalPolicyFactory] = None,
         group_policy: Optional[GroupPlanningPolicyPort] = None,
@@ -137,21 +137,21 @@ class CoordinationRuntime:
     ) -> None:
         if bid_window_s <= 0:
             raise ValueError("bid_window_s must be positive")
-        self.deepseek_config = deepseek_config or DeepSeekConfig.from_env()
+        self.llm_config = llm_config or LLMConfig.from_env()
         self._llm_listener: Optional[RuntimeListener] = None
         self.intent_interpreter = intent_interpreter or DeepSeekIntentInterpreter(
-            DeepSeekClient(self.deepseek_config)
+            DeepSeekClient(self.llm_config)
         )
         self.local_policy_factory = local_policy_factory or (
             lambda _device_id: DeepSeekLocalProposalPolicy(
                 DeepSeekClient(
-                    self.deepseek_config,
+                    self.llm_config,
                     telemetry_listener=self._llm_listener,
                 )
             )
         )
         self.group_policy = group_policy or DeepSeekGroupPlanningPolicy(
-            DeepSeekClient(self.deepseek_config)
+            DeepSeekClient(self.llm_config)
         )
         self.devices = devices or [
             DeviceRuntimeConfig("dog-a", battery=0.90, success_rate=0.95),
@@ -211,7 +211,7 @@ class CoordinationRuntime:
             status_listener,
             {
                 "stage": "intent_interpreting",
-                "message": "DeepSeek 正在把用户指令转换为结构化任务",
+                "message": "LLM 正在把用户指令转换为结构化任务",
             },
         )
         task = self.task_gen.generate(instruction)
@@ -250,7 +250,7 @@ class CoordinationRuntime:
                 store=FileCoordinatorStore(work_root),
                 group_policy=observed_group,
                 bid_window_s=self.bid_window_s,
-                group_policy_timeout_s=self.deepseek_config.timeout_s,
+                group_policy_timeout_s=self.llm_config.timeout_seconds,
             )
             hosts = self._build_hosts(client, work_root)
 
@@ -426,7 +426,8 @@ class CoordinationRuntime:
             "runtime": {
                 "contract": "coordination-v2",
                 "process_mode": "single_process_in_memory",
-                "model": self.deepseek_config.model,
+                "provider": self.llm_config.provider,
+                "model": self.llm_config.model,
                 "physical_gateway": "mock",
                 "device_ids": [item.device_id for item in self.devices],
             },
@@ -504,7 +505,7 @@ class CoordinationRuntime:
                     blackboard_connection_ref="memory",
                     work_root=work_root,
                     local_proposal_enabled=local_policy is not None,
-                    local_proposal_timeout_s=self.deepseek_config.timeout_s,
+                    local_proposal_timeout_s=self.llm_config.timeout_seconds,
                 ),
                 blackboard=client,
                 loop=PureAgentLoop(device.device_id),

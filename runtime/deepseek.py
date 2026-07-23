@@ -1,17 +1,15 @@
-# STATUS: STAGED(A类)—— DeepSeek V4 统一客户端与三类可注入 LLM 策略
-"""DeepSeek V4 runtime adapters.
+# STATUS: STAGED(A类)—— 通用 LLM 客户端与三类可注入策略
+"""OpenAI-compatible runtime LLM adapters.
 
-密钥只从进程环境或被 Git 忽略的 ``.env.local`` 读取。该模块位于 runtime，
-可以装配 ingress 和 coordination，但业务层不反向依赖具体模型厂商。
+配置与 HTTP 调用统一复用 ``swarm_brain.llm``。该模块位于 runtime，可以装配
+ingress 和 coordination，但业务层不反向依赖具体模型厂商。DeepSeek 前缀类名
+为合并分支的兼容 API，不代表存在第二套配置或请求实现。
 """
 from __future__ import annotations
 
 import json
-import os
-import re
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import replace
 from typing import Any, Callable, Mapping, Optional, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -23,11 +21,7 @@ from ..coordination.models import (
     GroupPlanningInput,
     to_json_value,
 )
-
-
-DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-v4-flash"
-SUPPORTED_V4_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro"}
+from ..llm import LLMConfig, call_llm
 
 
 class DeepSeekError(RuntimeError):
@@ -50,72 +44,11 @@ class JsonTransportPort(Protocol):
         timeout_s: float,
     ) -> dict[str, Any]: ...
 
-    def post_json(
-        self,
-        url: str,
-        headers: Mapping[str, str],
-        payload: dict[str, Any],
-        timeout_s: float,
-    ) -> dict[str, Any]: ...
-
-
 DeepSeekTelemetryListener = Callable[[dict[str, Any]], None]
-
-
-@dataclass(frozen=True)
-class DeepSeekConfig:
-    api_key: str = field(repr=False)
-    base_url: str = DEFAULT_BASE_URL
-    model: str = DEFAULT_MODEL
-    timeout_s: float = 30.0
-    max_tokens: int = 2048
-
-    def __post_init__(self) -> None:
-        normalized_key = self.api_key.strip()
-        object.__setattr__(self, "api_key", normalized_key)
-        if re.fullmatch(r"sk-[A-Za-z0-9_-]{20,}", normalized_key) is None:
-            raise DeepSeekConfigurationError(
-                "DEEPSEEK_API_KEY must contain the complete sk-... value"
-            )
-        if not self.base_url.startswith("https://"):
-            raise DeepSeekConfigurationError("DEEPSEEK_BASE_URL must use https")
-        if self.model not in SUPPORTED_V4_MODELS:
-            raise DeepSeekConfigurationError(
-                "DEEPSEEK_MODEL must be deepseek-v4-flash or deepseek-v4-pro"
-            )
-        if self.timeout_s <= 0:
-            raise DeepSeekConfigurationError("DEEPSEEK_TIMEOUT_S must be positive")
-        if self.max_tokens <= 0:
-            raise DeepSeekConfigurationError("DEEPSEEK_MAX_TOKENS must be positive")
-
-    @classmethod
-    def from_env(
-        cls,
-        env: Optional[Mapping[str, str]] = None,
-        *,
-        env_file: Optional[str | os.PathLike[str]] = None,
-    ) -> "DeepSeekConfig":
-        file_path = (
-            Path(env_file)
-            if env_file is not None
-            else Path(__file__).resolve().parents[1] / ".env.local"
-        )
-        values = _read_env_file(file_path)
-        values.update(dict(os.environ if env is None else env))
-        try:
-            timeout_s = float(values.get("DEEPSEEK_TIMEOUT_S", "30"))
-            max_tokens = int(values.get("DEEPSEEK_MAX_TOKENS", "2048"))
-        except ValueError as exc:
-            raise DeepSeekConfigurationError(
-                "DeepSeek numeric configuration is invalid"
-            ) from exc
-        return cls(
-            api_key=values.get("DEEPSEEK_API_KEY", ""),
-            base_url=values.get("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
-            model=values.get("DEEPSEEK_MODEL", DEFAULT_MODEL),
-            timeout_s=timeout_s,
-            max_tokens=max_tokens,
-        )
+LLMCaller = Callable[
+    [LLMConfig, list[dict[str, str]], Optional[Mapping[str, object]]],
+    dict[str, Any],
+]
 
 
 class UrllibJsonTransport:
@@ -128,21 +61,6 @@ class UrllibJsonTransport:
         timeout_s: float,
     ) -> dict[str, Any]:
         request = Request(url, headers=dict(headers), method="GET")
-        return self._send(request, timeout_s)
-
-    def post_json(
-        self,
-        url: str,
-        headers: Mapping[str, str],
-        payload: dict[str, Any],
-        timeout_s: float,
-    ) -> dict[str, Any]:
-        request = Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers=dict(headers),
-            method="POST",
-        )
         return self._send(request, timeout_s)
 
     @staticmethod
@@ -171,21 +89,29 @@ class UrllibJsonTransport:
 class DeepSeekClient:
     def __init__(
         self,
-        config: DeepSeekConfig,
+        config: LLMConfig,
         transport: Optional[JsonTransportPort] = None,
         telemetry_listener: Optional[DeepSeekTelemetryListener] = None,
+        llm_caller: LLMCaller = call_llm,
     ) -> None:
         self.config = config
-        self._transport = transport or UrllibJsonTransport()
+        self._transport = transport
         self.telemetry_listener = telemetry_listener
+        self._llm_caller = llm_caller
 
     def list_models(self) -> list[str]:
         """列出当前密钥实际可用的模型，不打印或返回密钥。"""
 
-        response = self._transport.get_json(
-            f"{self.config.base_url}/models",
-            {"Authorization": f"Bearer {self.config.api_key}"},
-            self.config.timeout_s,
+        if not self.config.base_url:
+            raise DeepSeekConfigurationError("LLM base_url is required")
+        headers = {}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        transport = self._transport or UrllibJsonTransport()
+        response = transport.get_json(
+            f"{self.config.base_url.rstrip('/')}/models",
+            headers,
+            self.config.timeout_seconds,
         )
         data = response.get("data")
         if not isinstance(data, list):
@@ -213,28 +139,25 @@ class DeepSeekClient:
             for item in messages
         ):
             raise ValueError("messages must contain valid role/content pairs")
-        payload: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
+        request_overrides: dict[str, Any] = {
             "stream": False,
             "temperature": 0,
-            "max_tokens": self.config.max_tokens,
             "response_format": {"type": "json_object"},
-            "thinking": {"type": "enabled" if thinking else "disabled"},
         }
         if thinking:
-            payload["reasoning_effort"] = "high"
+            request_overrides["reasoning_effort"] = "high"
         started = time.perf_counter()
         response: Optional[dict[str, Any]] = None
         try:
-            response = self._transport.post_json(
-                f"{self.config.base_url}/chat/completions",
-                {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.config.api_key}",
-                },
-                payload,
-                timeout_s if timeout_s is not None else self.config.timeout_s,
+            request_config = (
+                replace(self.config, timeout_seconds=timeout_s)
+                if timeout_s is not None
+                else self.config
+            )
+            response = self._llm_caller(
+                request_config,
+                messages,
+                request_overrides,
             )
             content = _extract_message_content(response)
             value = json.loads(content)
@@ -447,31 +370,6 @@ class DeepSeekGroupPlanningPolicy:
             rationale_summary=_required_string(value, "rationale_summary"),
             input_fingerprint=planning_input.input_fingerprint,
         )
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    if not path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for line_number, raw_line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            raise DeepSeekConfigurationError(
-                f"invalid env entry at {path.name}:{line_number}"
-            )
-        key, raw_value = line.split("=", 1)
-        key = key.strip()
-        value = raw_value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
 
 
 def _extract_message_content(response: dict[str, Any]) -> str:

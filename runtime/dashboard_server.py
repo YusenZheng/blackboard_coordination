@@ -1,7 +1,7 @@
 """Local real-time dashboard for the formal coordination runtime.
 
 The server uses only Python's standard library.  It binds to localhost by
-default, keeps DeepSeek credentials server-side, and streams Blackboard events
+default, keeps LLM credentials server-side, and streams Blackboard events
 to the browser with Server-Sent Events.
 """
 from __future__ import annotations

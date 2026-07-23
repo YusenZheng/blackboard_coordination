@@ -27,26 +27,20 @@ python -m pip install pytest
 ```powershell
 cd swarm_brain
 
-# 1. 本地配置 DeepSeek
-powershell -ExecutionPolicy Bypass -File .\scripts\configure_deepseek.ps1
+# 1. 在当前 PowerShell 进程设置 SWARM_BRAIN_LLM_* 环境变量
+# 具体字段见 llm/README.md
 
-# 2. 连接检查
-python -m swarm_brain.runtime.deepseek_healthcheck
+# 2. 一次运行完整 coordination v2 闭环
+python -m swarm_brain.runtime.skeleton "帮我找公园里走失的白色萨摩耶"
 
-# 3. 一次运行完整 coordination v2 闭环
-python -m swarm_brain.runtime "帮我找公园里走失的白色萨摩耶"
-
-# 4. 启动本地实时看板
+# 3. 启动本地实时看板
 python -m swarm_brain.runtime.dashboard_server
 # 浏览器访问 http://127.0.0.1:8765
-
-# 5. 离线回归测试
-python -m unittest discover -s runtime/tests -v
 ```
 
-正式入口依次完成意图识别、双设备竞标、群体判给、受限动作、回执和任务终态。
-`python -m swarm_brain.runtime.skeleton` 保留为旧版 v1 walking skeleton，仅用于兼容和
-理解早期六层结构，不作为 coordination v2 主入口。
+正式 skeleton 依次完成意图识别、双设备竞标、群体判给、受限动作、回执和任务终态，
+并打印 Coordinator、AgentProcessHost、PureAgentLoop、Blackboard 与 Session 细节。
+旧 L0 Harness 流程保留为 `python -m swarm_brain.runtime.skeleton --legacy`。
 
 ### 可选:前台接口(HTTP)
 
@@ -81,7 +75,7 @@ swarm_brain/
   ingress/      北向入口:任务生成流水线 + 事件接入 + 三出向接口。
   llm/          大模型配置:连接信息 + 生成参数(不绑定具体厂商 SDK)。
   memory/       记忆:私有记忆 + 共享事实库(接口已定义,实现待补)。
-  runtime/      coordination v2 正式装配入口 + 旧版 walking skeleton。
+  runtime/      coordination v2 正式 skeleton + 保留的 L0 legacy 流程。
 sim/            仿真:可通过性引擎 + 仿真适配器 + 网格桩(独立顶层)。
 eval/           评测:用例 + 指标 + 基线报告(独立顶层)。
 api/            前台接口:FastAPI 端点(可选)。
@@ -100,7 +94,7 @@ tests/          冒烟测试。
 | 北向入口   | `ingress/`            | task_gen(三段流水线)/ event_ingress / interfaces_out                  |
 | 大模型配置  | `llm/`                | 统一管理模型连接信息与生成参数，不保存密钥、不绑定具体厂商 SDK                         |
 | 记忆     | `memory/`             | 私有记忆 + 事实库(接口位)                                                  |
-| 运行时    | `runtime/`            | CoordinationRuntime / DeepSeek adapters / 旧版 skeleton            |
+| 运行时    | `runtime/`            | CoordinationRuntime / LLM adapters / 旧版 skeleton                 |
 | 独立顶层   | `sim/` `eval/` `api/` | 仿真 / 评测 / 前台接口                                                   |
 
 
@@ -113,9 +107,13 @@ tests/          冒烟测试。
 
 
 
-## 旧版 walking skeleton 演示什么
+## skeleton 演示什么
 
-`python -m swarm_brain.runtime.skeleton` 依次跑四条链路:
+默认命令运行 coordination-v2，真实装配 `Coordinator`、两个独立
+`AgentProcessHost` 及各自的 `PureAgentLoop`，事件从 `TASK_POSTED` 收敛到
+`TASK_DONE`。
+
+`python -m swarm_brain.runtime.skeleton --legacy` 保留原 L0 四链路:
 
 1. **主链路**:下任务 → 各设备出价 → 招投标判给 → 安全校验 → Agent Loop 自行调用工具 → 回执 → Trace 落档。
 2. **授权点 + 并发租约**:不可逆动作挂起等待人工确认;两设备并发 claim 同一资源,一方获租、一方被拒。

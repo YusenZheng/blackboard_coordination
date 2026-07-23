@@ -1,5 +1,9 @@
-# STATUS: STAGED(A类)—— ★可跑的 walking skeleton(样板间)。python -m swarm_brain.runtime.skeleton
-"""runtime.skeleton —— 走通最细链路的空壳样板间。
+# STATUS: STAGED(A类)—— coordination-v2 正式 skeleton + 保留的 L0 legacy 测试
+"""runtime.skeleton —— 项目唯一公开运行入口。
+
+默认执行 coordination-v2 的完整闭环，真实装配 Coordinator、两个
+AgentProcessHost 和各自的 PureAgentLoop。旧 L0 Harness 样板保留为
+``run_legacy()``，仅供后续契约级回归测试。
 
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║  这个 skeleton 证明了什么 / 没证明什么(A9,别被"跑通"误导)              ║
@@ -19,6 +23,9 @@
 """
 from __future__ import annotations
 
+import argparse
+import json
+
 from ..access.adapters.mock_adapter import MockAdapter
 from ..contracts.agent_card import AgentCard, CapabilitySlot
 from ..contracts.blackboard_event import BlackboardEvent, EventType, Ledger
@@ -30,6 +37,10 @@ from .harness import Harness
 from ..contracts.types import ParticipationDecision
 from ..contracts.bypass import TelemetrySample
 from ..contracts.bypass import EmergencyStop
+from .coordination_runtime import CoordinationRuntime
+
+
+DEFAULT_INSTRUCTION = "帮我找公园里走失的白色萨摩耶"
 
 def _make_card(dev_id, dtype, battery, tools=("G01",), width_cm=40):
     return AgentCard(
@@ -41,7 +52,7 @@ def _make_card(dev_id, dtype, battery, tools=("G01",), width_cm=40):
     )
 
 
-def run() -> Harness:
+def run_legacy() -> Harness:
     print("=" * 70)
     print("群体 Agent Harness · walking skeleton(L0 契约级跑通)")
     print("=" * 70)
@@ -238,5 +249,117 @@ def run() -> Harness:
     return h
 
 
+def _print_status(payload: dict) -> None:
+    stage = payload.get("stage", "unknown")
+    message = payload.get("message", "")
+    details = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"stage", "message"}
+    }
+    suffix = (
+        f" {json.dumps(details, ensure_ascii=False, sort_keys=True)}"
+        if details
+        else ""
+    )
+    print(f"  [阶段:{stage}] {message}{suffix}")
+
+
+def _print_llm_call(payload: dict) -> None:
+    print(
+        "  [LLM] "
+        f"operation={payload.get('operation')} "
+        f"model={payload.get('model')} "
+        f"status={payload.get('status')} "
+        f"duration_ms={payload.get('duration_ms')} "
+        f"tokens={payload.get('total_tokens')} "
+        f"error={payload.get('error_type')}"
+    )
+
+
+def _print_blackboard_event(payload: dict) -> None:
+    content = payload.get("content")
+    identifiers = {}
+    if isinstance(content, dict):
+        for key in (
+            "task_id",
+            "task_revision",
+            "coordination_epoch",
+            "bid_round",
+            "device_id",
+            "plan_id",
+            "assignment_id",
+            "intent_id",
+        ):
+            if key in content:
+                identifiers[key] = content[key]
+    print(
+        "  [Blackboard] "
+        f"v={payload.get('version')} "
+        f"type={payload.get('type')} "
+        f"source={payload.get('source')} "
+        f"ids={json.dumps(identifiers, ensure_ascii=False, sort_keys=True)}"
+    )
+
+
+def _print_agent_session(payload: dict) -> None:
+    session = payload.get("session")
+    state = session.get("state") if isinstance(session, dict) else None
+    current_intent = (
+        session.get("current_intent")
+        if isinstance(session, dict)
+        else None
+    )
+    print(
+        "  [AgentProcessHost] "
+        f"device={payload.get('device_id')} "
+        f"phase={payload.get('phase')} "
+        f"session_exists={payload.get('exists')} "
+        f"state={state} "
+        f"current_intent={json.dumps(current_intent, ensure_ascii=False)}"
+    )
+
+
+def run(instruction: str = DEFAULT_INSTRUCTION) -> dict:
+    """运行 coordination-v2，从 TASK_POSTED 一直收敛到 TASK_DONE。"""
+    print("=" * 78)
+    print("SwarmBrain skeleton · coordination-v2")
+    print("拓扑: Coordinator + AgentProcessHost(dog-a, dog-b) + PureAgentLoop × 2")
+    print("=" * 78)
+    result = CoordinationRuntime().run(
+        instruction,
+        event_listener=_print_blackboard_event,
+        status_listener=_print_status,
+        llm_listener=_print_llm_call,
+        session_listener=_print_agent_session,
+    )
+    print("\n【最终结果】")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print("\ncoordination-v2 skeleton ✓")
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run the SwarmBrain coordination skeleton"
+    )
+    parser.add_argument(
+        "instruction",
+        nargs="?",
+        default=DEFAULT_INSTRUCTION,
+        help="one-sentence task instruction",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="run the retained L0 Harness contract demo",
+    )
+    args = parser.parse_args()
+    if args.legacy:
+        run_legacy()
+    else:
+        run(args.instruction)
+
+
 if __name__ == "__main__":
-    run()
+    main()

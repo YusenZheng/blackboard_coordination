@@ -551,7 +551,7 @@
       <article class="metric">
         <div class="metric-label">Task status</div>
         <div class="metric-value" id="taskStatus">idle</div>
-        <div class="metric-note" id="modelName">DeepSeek · 未启动</div>
+        <div class="metric-note" id="modelName">LLM · 未启动</div>
       </article>
       <article class="metric">
         <div class="metric-label">Winner</div>
@@ -666,7 +666,7 @@
       <div class="panel-head">
         <div>
           <div class="panel-title">LLM 调用明细</div>
-          <div class="panel-kicker">Token 来自 DeepSeek usage；耗时由服务端实际计时</div>
+          <div class="panel-kicker">Token 来自 LLM usage；耗时由服务端实际计时</div>
         </div>
         <div class="llm-totals">
           <span>调用 <strong id="llmCallCount">0</strong></span>
@@ -790,7 +790,7 @@
       ui.taskStatus.textContent = "starting";
       ui.taskStatus.className = "metric-value";
       ui.winner.textContent = "—";
-      ui.modelName.textContent = "DeepSeek · 连接中";
+      ui.modelName.textContent = "LLM · 连接中";
       ui.groupReason.textContent = "等待两个有效 BID。";
       ui.assignedDevice.textContent = "—";
       ui.candidateMatch.textContent = "—";
