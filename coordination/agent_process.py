@@ -107,6 +107,7 @@ class AgentProcessHost:
         self.local_proposal_policy = local_proposal_policy
         self.mailbox = SimpleMailbox(mailbox_size)
         self.view_timeout_s = view_timeout_s
+        self.last_local_proposal_error: Optional[str] = None
         self._running = False
         self._current_input_offset: Optional[int] = None
         self._pending_commit_keys: list[tuple[str, str]] = []
@@ -346,6 +347,7 @@ class AgentProcessHost:
         availability: list[ExecutionAvailability],
         skill_references: list,
     ) -> Optional[CollaborationProposal]:
+        self.last_local_proposal_error = None
         if (
             not self.spec.local_proposal_enabled
             or self.local_proposal_policy is None
@@ -382,7 +384,11 @@ class AgentProcessHost:
             proposal = self.local_proposal_policy.propose(
                 to_json_value(context), self.spec.local_proposal_timeout_s
             )
-        except Exception:
+        except Exception as exc:
+            # Local model advice is optional and must never stop a hard BID.
+            # Keep one sanitized diagnostic for runtime observability; client
+            # exceptions already redact credentials and unsafe response bodies.
+            self.last_local_proposal_error = f"{type(exc).__name__}: {exc}"
             return None
         barrier = self.blackboard.high_watermark()
         refreshed = self._query_task_view(

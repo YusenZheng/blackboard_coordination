@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local runtime state and secrets.
+runtime_data/
+.env
+.env.*
+!.env.example
