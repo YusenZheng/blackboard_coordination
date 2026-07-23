@@ -14,6 +14,7 @@ MVP:实现 G(经适配器)+ 一个 mock Y;S/C/V 建 dispatch 分支 + 接口位,
 """
 from __future__ import annotations
 
+import copy
 from enum import Enum
 from uuid import uuid4
 
@@ -51,13 +52,21 @@ class ToolGateway:
         self.catalog = tool_registry
         self._device_registry = device_registry
         self.dispatched_intent_ids: list[str] = []
+        self.dispatched_intent_ids_by_device: dict[str, list[str]] = {}
+        self.tool_traces: list[dict] = []
+        self._external_trace_listener = trace_listener
         self._runtime = ToolRuntime(
             catalog=tool_registry,
             device_registry=device_registry,
             adapters=self._adapters,
             blackboard=blackboard,
-            trace_listener=trace_listener,
+            trace_listener=self._record_trace,
         )
+
+    def _record_trace(self, value: dict) -> None:
+        self.tool_traces.append(copy.deepcopy(value))
+        if self._external_trace_listener is not None:
+            self._external_trace_listener(value)
 
     def is_available(self, device_id: str, verb: str) -> bool:
         """按 Agent Card、动作动词和适配器绑定检查设备 Tool 是否可用。"""
@@ -76,6 +85,9 @@ class ToolGateway:
             词表由总监拍定后再实现此映射(改契约走审批)。
         """
         self.dispatched_intent_ids.append(intent.intent_id)
+        self.dispatched_intent_ids_by_device.setdefault(
+            intent.device_id, []
+        ).append(intent.intent_id)
         # B1 设备侧硬门控:急停生效期间,任何动作下发前被拦(急停后不再照发下一个 intent)
         if self._estop is not None and self._estop.is_stopped(intent.device_id):
             return ActionReceipt(intent_id=intent.intent_id, device_id=intent.device_id,

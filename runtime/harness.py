@@ -18,6 +18,7 @@ from ..assets.skill import load_builtin_skills
 from ..assets.trace import Trace
 from ..blackboard.board import Blackboard
 from ..coordination.agent_loop import AgentLoop
+from ..coordination.adapters import GuardrailSafetyPort
 from ..coordination.conflict import ConflictService
 from ..coordination.context_assembler import ContextAssembler
 from ..coordination.mode_selector import ModeSelector
@@ -31,7 +32,10 @@ class Harness:
 
     def __init__(self, adapters: dict = None):
         # 地基
-        self.blackboard = Blackboard()
+        from .coordination_runtime import RuntimeClock
+
+        self.clock = RuntimeClock()
+        self.blackboard = Blackboard(clock=self.clock)
         self.trace = Trace()
         # 安全(先建急停总线,ToolGateway 要用它做下发前门控)
         self.guardrail = Guardrail()
@@ -40,10 +44,16 @@ class Harness:
         self.estop = MockEmergencyStopBus(blackboard=self.blackboard)                # B3
         # 接入(Tool 网关注入急停总线 → 下发前查急停 B1)
         self.registry = Registry()
+        self.adapters = adapters or {}
         # 高频状态仍留在 Registry/Telemetry 旁路；Blackboard 只在协同决策点
         # 将其投影成 agent_public 快照，不把每条遥测灌入事件流。
         self.blackboard.set_agent_snapshot_provider(self.registry)
-        self.tool_gateway = ToolGateway(adapters=adapters or {}, estop_bus=self.estop)
+        self.tool_gateway = ToolGateway(
+            adapters=self.adapters,
+            estop_bus=self.estop,
+            device_registry=self.registry,
+            blackboard=self.blackboard,
+        )
         # 协同(含 Skill Graph:Agent Loop 检索经验参考)
         self.assembler = ContextAssembler()
         self.mode_selector = ModeSelector()
@@ -62,15 +72,32 @@ class Harness:
         # B2:Trace 订阅黑板事件流(派生落档,不双写)
         self.blackboard.subscribe(self.trace.on_event)
 
+    def register_agent(self, card) -> None:
+        """Register a device without attaching the retired legacy AgentLoop."""
+        self.registry.register(card)
+
     def spawn_agent(self, card) -> AgentLoop:
         """为一台注册设备生成云端虚拟 Agent 的常驻 loop(注入 skill_graph + tool_gateway + trace)。"""
-        self.registry.register(card)
+        self.register_agent(card)
+        return self.attach_legacy_agent_loop(card.identity.device_id)
+
+    def attach_legacy_agent_loop(self, device_id: str) -> AgentLoop:
+        """Attach the old loop only for retained non-v2 contract demonstrations."""
+        card = self.registry.get(device_id)
+        if card is None:
+            raise KeyError(f"device is not registered: {device_id}")
+        existing = self._loops.get(device_id)
+        if existing is not None:
+            return existing
         loop = AgentLoop(card, self.blackboard, self.assembler,
                          skill_graph=self.skill_graph, tool_gateway=self.tool_gateway,
                          trace=self.trace, guardrail=self.guardrail, auth_gate=self.auth_gate)
-        self._loops[card.identity.device_id] = loop
-        # 黑板事件驱动:任务发布事件 → 各 loop on_event 决定应征
-        self.blackboard.subscribe(loop.on_event)
+        self._loops[device_id] = loop
+        # 从当前水位开始，避免旧 loop 回放并污染已经完成的 v2 任务。
+        self.blackboard.subscribe(
+            loop.on_event,
+            from_offset=self.blackboard.high_watermark(),
+        )
         return loop
 
     def loops(self) -> dict:
@@ -80,6 +107,55 @@ class Harness:
         """按需构造集中式编排器(master-worker 挡)。与自主应征挡并存、可插拔。"""
         from ..coordination.master import MasterOrchestrator
         return MasterOrchestrator(self.registry, self.blackboard)
+
+    def run_coordination_v2(
+        self,
+        instruction: str,
+        *,
+        event_listener=None,
+        status_listener=None,
+        llm_listener=None,
+        session_listener=None,
+    ) -> dict:
+        """Run coordination-v2 inside this Harness using its shared layers."""
+        from .coordination_runtime import CoordinationRuntime, DeviceRuntimeConfig
+
+        devices = []
+        for card in self.registry.all_cards():
+            action_verbs = tuple(
+                getattr(item, "value", str(item))
+                for item in card.capability.action_verbs
+            )
+            devices.append(
+                DeviceRuntimeConfig(
+                    device_id=card.identity.device_id,
+                    battery=card.state.battery,
+                    endurance_s=card.state.endurance_s or 600.0,
+                    success_rate=card.resume.success_rate,
+                    capabilities=tuple(card.capability.profile.capabilities),
+                    action_verbs=action_verbs,
+                )
+            )
+        if len(devices) < 2:
+            raise ValueError("coordination-v2 requires at least two registered devices")
+
+        runtime = CoordinationRuntime(
+            devices=devices,
+            blackboard=self.blackboard,
+            clock=self.clock,
+            registry=self.registry,
+            tool_gateway=self.tool_gateway,
+            skill_graph=self.skill_graph,
+            safety=GuardrailSafetyPort(self.guardrail),
+            task_gen=self.task_gen,
+        )
+        return runtime.run(
+            instruction,
+            event_listener=event_listener,
+            status_listener=status_listener,
+            llm_listener=llm_listener,
+            session_listener=session_listener,
+        )
 
     def trigger_replan(self, task_id: str, clue_id: str) -> int:
         """B6:新线索驱动重协同 —— 让各 loop 就地重新评估(黑板状态变→计划跟着变)。

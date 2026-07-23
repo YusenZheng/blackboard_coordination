@@ -444,6 +444,16 @@ class Blackboard:
                     self._subscriber_errors[sid] = f"{type(exc).__name__}: {exc}"
         return sid
 
+    def unsubscribe(self, subscription_id: str) -> bool:
+        """Remove one synchronous subscriber without disturbing other consumers."""
+        with self._lock:
+            before = len(self._subscribers)
+            self._subscribers = [
+                item for item in self._subscribers if item[0] != subscription_id
+            ]
+            self._subscriber_errors.pop(subscription_id, None)
+            return len(self._subscribers) != before
+
     def claim(self, resource: str, device_id: str) -> bool:
         with self._lock:
             holder = self._leases.get(resource)

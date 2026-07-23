@@ -74,6 +74,41 @@ class StaticSafetyPort:
         return self.post
 
 
+class GuardrailSafetyPort:
+    """Adapt the Harness Guardrail to the coordination-v2 SafetyPort contract."""
+
+    def __init__(self, guardrail) -> None:
+        self.guardrail = guardrail
+
+    def pre_check(self, intent: ActionIntent) -> SafetyVerdict:
+        verdict = self.guardrail.check(intent)
+        risk_level = RiskLevel(str(verdict.reversibility))
+        reason_code = {
+            RiskLevel.R0: "SAFETY_OK",
+            RiskLevel.R1: "AUTH_REQUIRED",
+            RiskLevel.R2: "SAFETY_BLOCKED",
+        }[risk_level]
+        return SafetyVerdict(
+            allowed=bool(verdict.allowed),
+            risk_level=risk_level,
+            needs_auth=bool(verdict.needs_auth),
+            reason_code=reason_code,
+            reason=str(verdict.reason),
+        )
+
+    def post_check(
+        self, intent: ActionIntent, receipt: ActionReceipt
+    ) -> SafetyVerdict:
+        verdict = self.guardrail.post_check(receipt)
+        return SafetyVerdict(
+            allowed=bool(verdict.allowed),
+            risk_level=RiskLevel.R0,
+            needs_auth=False,
+            reason_code="POST_CHECK_OK",
+            reason=str(verdict.reason),
+        )
+
+
 class NullLocalProposalPolicy:
     def propose(self, context: dict, timeout_s: float) -> Optional[CollaborationProposal]:
         return None

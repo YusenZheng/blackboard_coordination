@@ -1,25 +1,13 @@
-# STATUS: STAGED(A类)—— coordination-v2 正式 skeleton + 保留的 L0 legacy 测试
+# STATUS: STAGED(A类)—— Harness 总装内嵌 coordination-v2 + 保留的 L0 辅助链路
 """runtime.skeleton —— 项目唯一公开运行入口。
 
-默认执行 coordination-v2 的完整闭环，真实装配 Coordinator、两个
-AgentProcessHost 和各自的 PureAgentLoop。旧 L0 Harness 样板保留为
-``run_legacy()``，仅供后续契约级回归测试。
+默认由 Harness 复用自身 Blackboard/Safety/Access/Assets，执行
+coordination-v2 完整闭环。多链路 Harness 演示中的链路1使用同一实现；
+链路2–4保留为后续契约级测试。
 
-╔═══════════════════════════════════════════════════════════════════════╗
-║  这个 skeleton 证明了什么 / 没证明什么(A9,别被"跑通"误导)              ║
-╠═══════════════════════════════════════════════════════════════════════╣
-║  跑通级别:L0(契约级)                                                    ║
-║  证明了:  ① 数据契约在单进程自洽(六层用同一套 contracts 接得起来)         ║
-║           ② 依赖防火墙不打架(下层不 import 上层)                          ║
-║           ③ 主循环顺序对(任务→黑板→bid→判给→安全→执行→回执→Trace)         ║
-║           ④ 两条链路结构成立(happy path + 授权点R1 + claim/yield 并发)     ║
-║  没证明:  ✗ 真 LLM 涌现(bid 是写死的,不是模型读黑板自主决策)——见 L1     ║
-║           ✗ 并发一致性(内存 dict,无真并发/无 CAS 防 lost update)         ║
-║           ✗ 物理执行(mock adapter print,无真机/真坐标/真时延)           ║
-║           ✗ 云端弱网(单进程,无云-端通信/断连)                            ║
-║  跑通分级:L0 契约 / L1 真LLM小网格(接 sim/grid_10x10) / L2 仿真闭环 / L3 真机 ║
-║  ——对外说"跑通"必带级别后缀。                                            ║
-╚═══════════════════════════════════════════════════════════════════════╝
+链路1使用真实 LLM 完成自主 proposal 与群体规划，执行端仍为 MockAdapter；
+因此它验证的是 coordination-v2 单进程闭环，不代表真实设备、弱网或分布式
+并发已经验证。链路2–4仍是 Harness 的 L0 契约级兼容演示。
 """
 from __future__ import annotations
 
@@ -34,10 +22,8 @@ from ..contracts.types import (CapabilityProfile, Clue, Confidence, ConfidenceLe
                                DeviceRef, DeviceState, DeviceType, Position)
 from ..contracts.verbs import ActionVerb
 from .harness import Harness
-from ..contracts.types import ParticipationDecision
 from ..contracts.bypass import TelemetrySample
 from ..contracts.bypass import EmergencyStop
-from .coordination_runtime import CoordinationRuntime
 
 
 DEFAULT_INSTRUCTION = "帮我找公园里走失的白色萨摩耶"
@@ -45,94 +31,51 @@ DEFAULT_INSTRUCTION = "帮我找公园里走失的白色萨摩耶"
 def _make_card(dev_id, dtype, battery, tools=("G01",), width_cm=40):
     return AgentCard(
         identity=DeviceRef(device_id=dev_id, device_type=dtype),
-        state=DeviceState(battery=battery),
-        capability=CapabilitySlot(atomic_tools=list(tools),
-                                  profile=CapabilityProfile(capabilities=["ground_search"],
-                                                            width_cm=width_cm)),
+        state=DeviceState(battery=battery, endurance_s=600.0),
+        capability=CapabilitySlot(
+            action_verbs=[ActionVerb.MOVE_TO],
+            atomic_tools=list(tools),
+            profile=CapabilityProfile(capabilities=["search"], width_cm=width_cm),
+        ),
     )
 
 
 def run_legacy() -> Harness:
     print("=" * 70)
-    print("群体 Agent Harness · walking skeleton(L0 契约级跑通)")
+    print("群体 Agent Harness · coordination-v2 + L0 辅助链路")
     print("=" * 70)
 
     # 两台机器狗共用一个 mock 适配器角色
     dogs = {"dog_a": MockAdapter("dog_a"), "dog_b": MockAdapter("dog_b")}
     h = Harness(adapters=dogs)
 
-    # ── 链路一:任务→黑板→多Agent bid→判给→安全check(R0)→执行→回执→Trace ──
-    print("\n【链路一 · happy path】")
-    # 1. 先注册两台设备(生成云端虚拟 Agent loop)
-    h.spawn_agent(_make_card("dog_a", DeviceType.DOG, battery=1.0))
-    h.spawn_agent(_make_card("dog_b", DeviceType.DOG, battery=0.5))
+    # ── 链路一:Harness 共享层 → coordination-v2 完整协同闭环 ──
+    print("\n【链路一 · coordination-v2 happy path】")
+    # 只注册 Agent Card，不挂旧 AgentLoop；竞标、判给和执行全部交给 v2。
+    h.register_agent(_make_card("dog_a", DeviceType.DOG, battery=1.0))
+    h.register_agent(_make_card("dog_b", DeviceType.DOG, battery=0.5))
+    result = h.run_coordination_v2(
+        "帮我找走失的萨摩耶幼犬",
+        event_listener=_print_blackboard_event,
+        status_listener=_print_status,
+        llm_listener=_print_llm_call,
+        session_listener=_print_agent_session,
+    )
+    task_id = result["task"]["task_id"]
+    winner_id = result["task"]["winner"]
+    receipt = result["execution"]["receipt"]
+    print(
+        "  [链路1结果] "
+        f"task={task_id} winner={winner_id} "
+        f"status={result['task']['status']} "
+        f"gateway={result['runtime']['physical_gateway']} "
+        f"tool_traces={len(result['execution']['tool_traces'])}"
+    )
+    h.registry.update_resume(winner_id, bool(receipt and receipt["success"]))
 
-    # 2. 北向 ingress 三段 pipeline 生成任务包
-    task = h.task_gen.generate("帮我找走失的萨摩耶幼犬")
-    print(f"  [任务生成] {task.task_id} 目标={task.goal} 初始信任={task.initial_autonomy_level} "
-          f"挡位={h.mode_selector.route(task)}")
-
-    # 3. 任务发布到黑板 → 事件驱动各 loop 自主 bid(写死决策)
-    h.blackboard.append(BlackboardEvent(id=f"post-{task.task_id}", 
-                                        type=EventType.TASK_POSTED, 
-                                        ledger=Ledger.TASK,
-                                        content={"task_id": task.task_id, 
-                                                 "task_type": task.task_type,
-                                                 "goal": task.goal  }, 
-                                        source="ingress"))
-
-    # 4. 协同层收集 bid,招投标判给出价最高者
-    bids = h.blackboard.read_events(types=[EventType.BID])
-
-    decisions = [ParticipationDecision(device_id=e.content["device_id"],
-                                       decision=e.content.get("decision", "reject"),
-                                       bid_score=e.content["bid_score"],
-                                       reason_codes=[e.content.get("reason", "")]) for e in bids]
-    for d in decisions:
-        print(f"  [应征] {d.device_id} decision={d.decision} bid={d.bid_score} "
-              f"({'；'.join(d.reason_codes)})")
-        
-    winner = h.conflict.rank_bids(task.task_id, decisions)
-    print(f"  [判给] 中标 = {winner.device_id}(bid={winner.bid_score})")
-
-    h.blackboard.append(BlackboardEvent(id=f"assign-{task.task_id}", 
-                                        type=EventType.TASK_ASSIGNED, 
-                                        ledger=Ledger.TASK,
-                                        content={"task_id": task.task_id, 
-                                                 "device_id": winner.device_id}, 
-                                        source="coord"))
-
-    # 5. 中标者产出动作意图 → 安全 check(R0 放行)→【中标者的 loop 自己发起 tool_call】→ 回执回黑板
-    intent = ActionIntent(intent_id="mv-1", 
-                          device_id=winner.device_id,
-                          verb=ActionVerb.MOVE_TO, 
-                          params={"target": "waypoint_A"}, 
-                          reversible=True)
-    
-    verdict = h.guardrail.check(intent)
-    print(f"  [安全] {intent.intent_id} {verdict.reversibility} → "
-          f"{'放行' if verdict.allowed else '拦截/需授权'}({verdict.reason})")
-    
-    # loop 自己发起 tool_call(act 内部经 tool_gateway 执行 + observation 回执写黑板),非 harness 代劳
-    receipt = h.loops()[winner.device_id].act(intent)
-    print(f"  [tool_call] {winner.device_id} 的 loop 自己调工具执行,回执 success={receipt.success}")
-
-
-
-
-
-
-
-
-
-
-
-
-    # 另演一次 call_tool:经 ToolRegistry 查到 G01 并 run(证明"注册→查表→run"通)
-    g01_result = h.tool_gateway.call_tool("G01", {"destination": "waypoint_A", "movement_mode": "四足行走"})
-    print(f"  [call_tool] 查注册表调 G01 → {g01_result.get('status')}")
-
-    h.registry.update_resume(winner.device_id, receipt.success)   # C14 履历闭环
+    # 链路2–4仍是兼容测试；仅在 v2 结束后挂载旧 loop，且不回放历史。
+    for device_id in ("dog_a", "dog_b"):
+        h.attach_legacy_agent_loop(device_id)
 
 
 
@@ -193,37 +136,37 @@ def run_legacy() -> Harness:
     clue = Clue(clue_id="clue-1", 
                 position=Position(label="waypoint_B", area="片区B"),
                 confidence=Confidence(level=ConfidenceLevel.MID, score=0.6, method="mock"),
-                source_device=winner.device_id)
+                source_device=winner_id)
     
     h.blackboard.append(BlackboardEvent(id="clue-1", 
                                         type=EventType.CLUE, 
                                         ledger=Ledger.EVIDENCE,
                                         content={"clue_id": clue.clue_id, 
                                                  "position": clue.position.label,
-                                                 "task_id": task.task_id}, source=winner.device_id, confidence=0.6))
-    print(f"  [线索] {winner.device_id} 发现线索 clue-1@waypoint_B → 写黑板(事实证据账本)")
+                                                 "task_id": task_id}, source=winner_id, confidence=0.6))
+    print(f"  [线索] {winner_id} 发现线索 clue-1@waypoint_B → 写黑板(事实证据账本)")
 
     # 事件驱动:各 loop 的 on_event 收到 CLUE → 触发一次重协同(重新评估/改派)
-    replanned = h.trigger_replan(task.task_id, "clue-1")
+    replanned = h.trigger_replan(task_id, "clue-1")
     print(f"  [重协同] 新线索驱动 → {replanned} 台设备重新评估(黑板状态变→计划跟着变,非一条道跑到黑)")
 
     # ── 收尾:任务完成 + 遥测/急停/Trace/运营账本 ──
     print("\n【收尾】")
     # B4:设备执行前后经遥测旁路上报状态(旁路 LLM 直更 agent card + 抄送 Trace)
     
-    h.telemetry.push(TelemetrySample(device_id=winner.device_id, 
+    h.telemetry.push(TelemetrySample(device_id=winner_id,
                                      battery=0.8,
                                      position={"label": "waypoint_A"}, 
                                      current_action="搜索中"))
-    print(f"  [遥测旁路] {winner.device_id} 上报电量 1.0→0.8(旁路四账本折叠,直更 agent card + 抄 Trace)")
+    print(f"  [遥测旁路] {winner_id} 上报电量 1.0→0.8(旁路四账本折叠,直更 agent card + 抄 Trace)")
 
     # B3:演一次急停(旁路所有软件层直达驱动)
     
     h.estop.signal(EmergencyStop(scope="all", reason="演示:一键急停"))
     # B1 验证:急停生效期间,loop 再发动作 → 被设备侧门控拦下(急停后不照发下一个 intent)
-    blocked = h.loops()[winner.device_id].act(
+    blocked = h.loops()[winner_id].act(
         ActionIntent(intent_id="after-estop", 
-                     device_id=winner.device_id,
+                     device_id=winner_id,
                      verb=ActionVerb.MOVE_TO, 
                      params={"target": "waypoint_C"}, 
                      reversible=True))
@@ -231,20 +174,15 @@ def run_legacy() -> Harness:
     h.estop.clear("all")
 
     print(f"  [急停解除] 解除后动作可恢复下发")
-    h.blackboard.append(BlackboardEvent(id=f"done-{task.task_id}", 
-                                        type=EventType.TASK_DONE, 
-                                        ledger=Ledger.TASK,
-                                        content={"task_id": task.task_id}, 
-                                        source="coord"))
     view = h.blackboard.query_view(ledger=Ledger.TASK)
-    print(f"  [黑板派生视图] 任务 {task.task_id} 状态 = {view['tasks'][task.task_id]['status']}")
+    print(f"  [黑板派生视图] 任务 {task_id} 状态 = {view['tasks'][task_id]['status']}")
     print(f"  [Trace] 协同事件落档 {len(h.trace.all_events())} 条(订阅黑板派生)"
           f" + 模型级细节 {len(h.trace._model_details)} 条(Trace 独有第二数据源,黑板不承载)")
     print(f"  [运营账本] {h.ledger.summary()}")
 
     print("\n" + "=" * 70)
-    print("L0 契约级跑通 ✓ —— 契约自洽/依赖不打架/主循环顺序对/两链路结构成立")
-    print("(未证明:真LLM涌现/并发一致/物理执行/弱网 —— 见 skeleton 顶部说明)")
+    print("链路1 coordination-v2 闭环 ✓；链路2–4 L0 兼容检查 ✓")
+    print("(执行端仍为 MockAdapter；未验证真机、弱网和分布式并发)")
     print("=" * 70)
     return h
 
@@ -321,12 +259,23 @@ def _print_agent_session(payload: dict) -> None:
 
 
 def run(instruction: str = DEFAULT_INSTRUCTION) -> dict:
-    """运行 coordination-v2，从 TASK_POSTED 一直收敛到 TASK_DONE。"""
+    """由 Harness 共享六层组件运行 coordination-v2 完整闭环。"""
     print("=" * 78)
-    print("SwarmBrain skeleton · coordination-v2")
+    print("SwarmBrain skeleton · Harness + coordination-v2")
     print("拓扑: Coordinator + AgentProcessHost(dog-a, dog-b) + PureAgentLoop × 2")
     print("=" * 78)
-    result = CoordinationRuntime().run(
+    adapters = {
+        "dog-a": MockAdapter("dog-a"),
+        "dog-b": MockAdapter("dog-b"),
+    }
+    harness = Harness(adapters=adapters)
+    harness.register_agent(
+        _make_card("dog-a", DeviceType.DOG, battery=0.90)
+    )
+    harness.register_agent(
+        _make_card("dog-b", DeviceType.DOG, battery=0.65)
+    )
+    result = harness.run_coordination_v2(
         instruction,
         event_listener=_print_blackboard_event,
         status_listener=_print_status,
@@ -335,7 +284,7 @@ def run(instruction: str = DEFAULT_INSTRUCTION) -> dict:
     )
     print("\n【最终结果】")
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    print("\ncoordination-v2 skeleton ✓")
+    print("\nHarness + coordination-v2 skeleton ✓")
     return result
 
 
@@ -352,7 +301,7 @@ def main() -> None:
     parser.add_argument(
         "--legacy",
         action="store_true",
-        help="run the retained L0 Harness contract demo",
+        help="run the Harness multi-link demo (chain 1 uses coordination-v2)",
     )
     args = parser.parse_args()
     if args.legacy:

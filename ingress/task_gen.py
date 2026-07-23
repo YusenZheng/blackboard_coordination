@@ -925,6 +925,14 @@ def task_package_to_v2_content(
     if task_revision < 1:
         raise ValueError("task_revision must be >= 1")
     requirement = asdict(task.requirement) if task.requirement is not None else {}
+    role_slots = copy.deepcopy(task.extra.get("role_slots") or [])
+    if not role_slots:
+        role_slots = TaskGen._default_role_slots()
+        required_capabilities = requirement.get("required_capabilities") or []
+        if required_capabilities:
+            role_slots[0]["required_capability_ids"] = list(
+                required_capabilities
+            )
     return {
         "schema_version": 2,
         "task_id": task.task_id,
@@ -937,7 +945,7 @@ def task_package_to_v2_content(
         "requirement": requirement,
         "target_profile": dict(task.target_profile),
         "area": asdict(task.area) if task.area is not None else None,
-        "role_slots": list(task.extra.get("role_slots", [])),
+        "role_slots": role_slots,
         "extra": {
             key: value
             for key, value in task.extra.items()

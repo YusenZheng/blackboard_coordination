@@ -43,6 +43,7 @@ from ..coordination.models import (
 from ..coordination.ports import (
     GroupPlanningPolicyPort,
     LocalProposalPolicyPort,
+    SafetyPort,
 )
 from ..ingress.task_gen import (
     IntentInterpreterPort,
@@ -141,6 +142,13 @@ class CoordinationRuntime:
         group_policy: Optional[GroupPlanningPolicyPort] = None,
         devices: Optional[list[DeviceRuntimeConfig]] = None,
         bid_window_s: float = 30.0,
+        blackboard: Optional[Blackboard] = None,
+        clock: Optional[RuntimeClock] = None,
+        registry: Optional[Registry] = None,
+        tool_gateway: Optional[ToolGateway] = None,
+        skill_graph=None,
+        safety: Optional[SafetyPort] = None,
+        task_gen: Optional[TaskGen] = None,
     ) -> None:
         if bid_window_s <= 0:
             raise ValueError("bid_window_s must be positive")
@@ -168,8 +176,18 @@ class CoordinationRuntime:
             raise ValueError("coordination demo requires at least two devices")
         if len({item.device_id for item in self.devices}) != len(self.devices):
             raise ValueError("device_id values must be unique")
+        if blackboard is not None and clock is None:
+            raise ValueError("an injected blackboard requires its advanceable clock")
+        if tool_gateway is not None and registry is None:
+            raise ValueError("an injected tool_gateway requires its device registry")
         self.bid_window_s = bid_window_s
-        self.task_gen = TaskGen(self.intent_interpreter)
+        self.blackboard = blackboard
+        self.clock = clock
+        self.registry = registry
+        self.tool_gateway = tool_gateway
+        self.skill_graph = skill_graph
+        self.safety = safety
+        self.task_gen = task_gen or TaskGen(self.intent_interpreter)
 
     def run(
         self,
@@ -193,11 +211,12 @@ class CoordinationRuntime:
                 "message": "初始化 Blackboard 与设备运行时",
             },
         )
-        clock = RuntimeClock()
-        board = Blackboard(clock=clock)
+        clock = self.clock or RuntimeClock()
+        board = self.blackboard or Blackboard(clock=clock)
         client = BlackboardClient(board)
+        event_subscription_id = None
         if event_listener is not None:
-            board.subscribe(
+            event_subscription_id = board.subscribe(
                 lambda event, offset: _notify(
                     event_listener,
                     {
@@ -209,7 +228,8 @@ class CoordinationRuntime:
                         "ts": event.ts,
                         "content": to_json_value(event.content),
                     },
-                )
+                ),
+                from_offset=board.high_watermark(),
             )
         for device in self.devices:
             board.upsert_agent_snapshot(device.public_snapshot(clock.value))
@@ -250,6 +270,11 @@ class CoordinationRuntime:
 
         observed_group = ObservedGroupPlanningPolicy(self.group_policy)
         tool_traces: list[dict] = []
+        injected_trace_start = (
+            len(self.tool_gateway.tool_traces)
+            if self.tool_gateway is not None
+            else 0
+        )
         with tempfile.TemporaryDirectory(
             prefix="swarmbrain-coordination-"
         ) as work_root:
@@ -342,10 +367,22 @@ class CoordinationRuntime:
                 },
             )
             assignment_processed[winner] = hosts[winner].poll_once(timeout_s=0)
-            dispatched_by_device = {
-                device_id: list(host.action_gateway.dispatched_intent_ids)
-                for device_id, host in hosts.items()
-            }
+            dispatched_by_device = {}
+            for device_id, host in hosts.items():
+                per_device = getattr(
+                    host.action_gateway,
+                    "dispatched_intent_ids_by_device",
+                    None,
+                )
+                dispatched_by_device[device_id] = list(
+                    per_device.get(device_id, [])
+                    if per_device is not None
+                    else getattr(
+                        host.action_gateway,
+                        "dispatched_intent_ids",
+                        [],
+                    )
+                )
             self._publish_sessions(
                 session_listener,
                 hosts,
@@ -428,6 +465,8 @@ class CoordinationRuntime:
         receipts = action_view["receipts_by_intent"]
         intent_id = next(iter(intents), None)
         bids = bid_view["bids_by_device"]
+        if self.tool_gateway is not None:
+            tool_traces = self.tool_gateway.tool_traces[injected_trace_start:]
 
         result = {
             "status": "ok" if task_view["status"] == "done" else "incomplete",
@@ -502,6 +541,8 @@ class CoordinationRuntime:
                 "high_watermark": watermark,
             },
         )
+        if event_subscription_id is not None:
+            board.unsubscribe(event_subscription_id)
         return result
 
     def _build_hosts(
@@ -510,41 +551,59 @@ class CoordinationRuntime:
         work_root: str,
         tool_trace_listener: Optional[RuntimeListener] = None,
     ) -> dict[str, AgentProcessHost]:
-        registry = Registry()
-        for device in self.devices:
-            registry.register(
-                AgentCard(
-                    identity=DeviceRef(device.device_id, DeviceType.DOG),
-                    state=DeviceState(
-                        battery=device.battery,
-                        endurance_s=device.endurance_s,
-                        online=True,
-                        healthy=True,
-                    ),
-                    capability=CapabilitySlot(
-                        action_verbs=[
-                            ActionVerb(value) for value in device.action_verbs
-                        ],
-                        atomic_tools=["G01"],
-                        profile=CapabilityProfile(
-                            capabilities=list(device.capabilities),
-                            width_cm=40,
+        registry = self.registry or Registry()
+        if self.registry is None:
+            for device in self.devices:
+                registry.register(
+                    AgentCard(
+                        identity=DeviceRef(device.device_id, DeviceType.DOG),
+                        state=DeviceState(
+                            battery=device.battery,
+                            endurance_s=device.endurance_s,
+                            online=True,
+                            healthy=True,
                         ),
-                    ),
+                        capability=CapabilitySlot(
+                            action_verbs=[
+                                ActionVerb(value) for value in device.action_verbs
+                            ],
+                            atomic_tools=["G01"],
+                            profile=CapabilityProfile(
+                                capabilities=list(device.capabilities),
+                                width_cm=40,
+                            ),
+                        ),
+                    )
                 )
+        missing_devices = [
+            item.device_id
+            for item in self.devices
+            if registry.get(item.device_id) is None
+        ]
+        if missing_devices:
+            raise ValueError(
+                f"runtime registry is missing devices: {missing_devices}"
             )
-        catalog = load_builtin_tools()
+        catalog = (
+            self.tool_gateway.catalog
+            if self.tool_gateway is not None
+            else load_builtin_tools()
+        )
         skill_provider = AssetSkillReferenceProvider(
-            load_builtin_skills(), catalog
+            self.skill_graph or load_builtin_skills(), catalog
         )
         hosts: dict[str, AgentProcessHost] = {}
         for device in self.devices:
-            gateway = ToolGateway(
-                adapters={device.device_id: MockAdapter(device.device_id)},
-                tool_registry=catalog,
-                device_registry=registry,
-                blackboard=client,
-                trace_listener=tool_trace_listener,
+            gateway = (
+                self.tool_gateway
+                if self.tool_gateway is not None
+                else ToolGateway(
+                    adapters={device.device_id: MockAdapter(device.device_id)},
+                    tool_registry=catalog,
+                    device_registry=registry,
+                    blackboard=client,
+                    trace_listener=tool_trace_listener,
+                )
             )
             local_policy = self.local_policy_factory(device.device_id)
             hosts[device.device_id] = AgentProcessHost(
@@ -559,7 +618,7 @@ class CoordinationRuntime:
                 loop=PureAgentLoop(device.device_id),
                 session_store=FileTaskSessionStore(work_root, device.device_id),
                 action_executor=ActionExecutor(
-                    safety=StaticSafetyPort(),
+                    safety=self.safety or StaticSafetyPort(),
                     gateway=gateway,
                 ),
                 action_gateway=gateway,
