@@ -70,12 +70,45 @@ class SkillGraph:
     def all(self) -> list:
         return list(self._skills.values())
 
+    def search(
+        self,
+        *,
+        task_type: str | None = None,
+        situation_tags: list | None = None,
+        capability_ids: list | None = None,
+        available_tool_ids: set[str] | None = None,
+        limit: int = 3,
+    ) -> list[Skill]:
+        """检索可参考 Skill；缺失的查询维度视为不设限。"""
+        situations = set(situation_tags or [])
+        capabilities = set(capability_ids or [])
+        available = set(available_tool_ids or [])
+        matches = []
+        for skill in self._skills.values():
+            trigger = skill.trigger or {}
+            if task_type and trigger.get("task_type") not in (None, task_type):
+                continue
+            required_caps = set(trigger.get("capability_ids", []))
+            if capabilities and required_caps and not required_caps <= capabilities:
+                continue
+            situation = trigger.get("situation")
+            if situations and situation and situation not in situations:
+                continue
+            if available and skill.tool_chain and not set(skill.tool_chain).intersection(available):
+                continue
+            matches.append(skill)
+            if len(matches) >= max(0, limit):
+                break
+        return matches
+
 
 def load_builtin_skills() -> SkillGraph:
     """加载内置 Skill(骨架只挂 1 样例;后续补的 Skill 也在这里挂)。"""
     g = SkillGraph()
     from .skills.fanshaped_search import FANSHAPED_SEARCH
+    from .skills.safe_search_execution import SAFE_SEARCH_EXECUTION
     g.register(FANSHAPED_SEARCH)
+    g.register(SAFE_SEARCH_EXECUTION)
     # TODO:照 fanshaped_search 补 多源线索定位/跨设备视觉接力/物理约束匹配/
     #   低电补位(L1)+ 抢道让位钳形分工/边缘躲藏预判(L2,过 Y07 验证注册)
     return g

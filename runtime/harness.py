@@ -29,7 +29,7 @@ from ..safety.reversibility import MockAuthorizationGate
 class Harness:
     """群体 Agent Harness 运行时:装配所有层。"""
 
-    def __init__(self, adapters: dict = None):
+    def __init__(self, adapters: dict = None, *, intent_interpreter=None):
         # 地基
         self.blackboard = Blackboard()
         self.trace = Trace()
@@ -43,7 +43,11 @@ class Harness:
         # 高频状态仍留在 Registry/Telemetry 旁路；Blackboard 只在协同决策点
         # 将其投影成 agent_public 快照，不把每条遥测灌入事件流。
         self.blackboard.set_agent_snapshot_provider(self.registry)
-        self.tool_gateway = ToolGateway(adapters=adapters or {}, estop_bus=self.estop)
+        self.tool_gateway = ToolGateway(
+            adapters=adapters or {},
+            estop_bus=self.estop,
+            device_registry=self.registry,
+        )
         # 协同(含 Skill Graph:Agent Loop 检索经验参考)
         self.assembler = ContextAssembler()
         self.mode_selector = ModeSelector()
@@ -55,7 +59,8 @@ class Harness:
         from ..access.telemetry import TelemetryChannel
         self.telemetry = TelemetryChannel(registry=self.registry, trace=self.trace)  # B4
         # 北向
-        self.task_gen = TaskGen()
+        self.task_gen = TaskGen(intent_interpreter=intent_interpreter)
+        self.intent_interpreter = intent_interpreter
         # 每设备一个云端虚拟 Agent 的 loop
         self._loops: dict = {}
 

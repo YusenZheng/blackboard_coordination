@@ -43,4 +43,5 @@ G01_NAVIGATE = ToolSpec(
     },
     reuse_events=["E05", "E12", "E13", "E15", "E17"],
     run=_run_g01,
+    action_verb="move_to",
 )

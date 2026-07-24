@@ -396,6 +396,7 @@ class SkillReference:
     strategy_summary: str
     applicable_conditions: list[str]
     source_ref: str
+    tool_chain: list[str] = field(default_factory=list)
 
 
 @dataclass

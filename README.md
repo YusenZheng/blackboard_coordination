@@ -35,8 +35,9 @@ python -m unittest discover
 ```
 
 正式入口依次完成意图识别、双设备竞标、群体判给、受限动作、回执和任务终态。
-`python -m swarm_brain.runtime.skeleton` 保留为旧版 v1 walking skeleton，仅用于兼容和
-理解早期六层结构，不作为 coordination v2 主入口。
+`python -m swarm_brain.runtime.skeleton` 保留为旧版 v1 walking skeleton；默认同样通过
+当前 `runtime/deepseek.py` 做真实意图解析。没有模型配置时，可显式使用
+`python -m swarm_brain.runtime.skeleton --offline` 只验证确定性契约链路。
 
 ### 可选:前台接口(HTTP)
 
@@ -103,7 +104,8 @@ tests/          冒烟测试。
 
 ## 旧版 walking skeleton 演示什么
 
-`python -m swarm_brain.runtime.skeleton` 依次跑四条链路:
+`python -m swarm_brain.runtime.skeleton` 使用当前 DeepSeek 配置并依次跑四条链路；
+`--offline` 模式才使用确定性意图 fallback：
 
 1. **主链路**:下任务 → 各设备出价 → 招投标判给 → 安全校验 → Agent Loop 自行调用工具 → 回执 → Trace 落档。
 2. **授权点 + 并发租约**:不可逆动作挂起等待人工确认;两设备并发 claim 同一资源,一方获租、一方被拒。

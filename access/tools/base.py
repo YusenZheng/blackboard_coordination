@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from ...contracts.tooling import CapabilityRequirement
+
 
 @dataclass
 class ToolSpec:
@@ -23,6 +25,12 @@ class ToolSpec:
     reuse_events: list = field(default_factory=list)     # 复用的事件(如 ["E05","E12"])
     run: Optional[Callable] = None   # 执行函数(mock 或真实现)
     extra: dict = field(default_factory=dict)
+    executor_type: str = "device"  # device / platform / blackboard / registry
+    aliases: list[str] = field(default_factory=list)
+    implemented: bool = True
+    version: str = "1.0.0"
+    requirements: CapabilityRequirement = field(default_factory=CapabilityRequirement)
+    action_verb: Optional[str] = None
 
 
 class ToolRegistry:
@@ -30,12 +38,28 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, ToolSpec] = {}
+        self._aliases: dict[str, str] = {}
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.tool_id] = spec
+        for alias in spec.aliases:
+            self._aliases[alias] = spec.tool_id
 
     def get(self, tool_id: str) -> Optional[ToolSpec]:
-        return self._tools.get(tool_id)
+        return self._tools.get(self.canonical_id(tool_id))
+
+    def list(self) -> list[ToolSpec]:
+        return list(self._tools.values())
+
+    def canonical_id(self, tool_id: str) -> str:
+        return self._aliases.get(tool_id, tool_id)
+
+    def for_action_verb(self, verb: str) -> Optional[ToolSpec]:
+        value = getattr(verb, "value", verb)
+        return next(
+            (spec for spec in self._tools.values() if spec.action_verb == value),
+            None,
+        )
 
 
 def load_builtin_tools() -> ToolRegistry:
@@ -43,5 +67,8 @@ def load_builtin_tools() -> ToolRegistry:
     reg = ToolRegistry()
     from .g01_navigate import G01_NAVIGATE
     reg.register(G01_NAVIGATE)
-    # TODO:reg.register(G02_SCAN) ... 照 g01_navigate 样例逐个补
+    from .mvp_platform import C03_CLAIM, S11_BATTERY_ANALYSIS, Y06_CAPABILITY_QUERY
+    reg.register(S11_BATTERY_ANALYSIS)
+    reg.register(C03_CLAIM)
+    reg.register(Y06_CAPABILITY_QUERY)
     return reg

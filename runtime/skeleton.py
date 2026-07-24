@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+import argparse
+
 from ..access.adapters.mock_adapter import MockAdapter
 from ..contracts.agent_card import AgentCard, CapabilitySlot
 from ..contracts.blackboard_event import BlackboardEvent, EventType, Ledger
@@ -41,14 +43,42 @@ def _make_card(dev_id, dtype, battery, tools=("G01",), width_cm=40):
     )
 
 
-def run() -> Harness:
+def _current_model_interpreter():
+    """按当前 runtime/deepseek.py 配置创建北向模型解释器。"""
+    from .deepseek import (
+        DeepSeekClient,
+        DeepSeekConfig,
+        DeepSeekConfigurationError,
+        DeepSeekIntentInterpreter,
+    )
+
+    try:
+        config = DeepSeekConfig.from_env()
+    except DeepSeekConfigurationError as exc:
+        raise SystemExit(
+            f"链路一需要当前项目的 DeepSeek 配置: {exc}；"
+            "仅做离线契约测试时请使用 --offline"
+        ) from exc
+    print(
+        f"  [模型装配] provider=DeepSeek model={config.model} "
+        f"base_url={config.base_url}"
+    )
+    return DeepSeekIntentInterpreter(DeepSeekClient(config))
+
+
+def run(*, offline: bool = False, intent_interpreter=None) -> Harness:
     print("=" * 70)
     print("群体 Agent Harness · walking skeleton(L0 契约级跑通)")
     print("=" * 70)
 
+    if intent_interpreter is None and not offline:
+        intent_interpreter = _current_model_interpreter()
+    if offline:
+        print("  [模型装配] offline=True，显式使用确定性意图 fallback")
+
     # 两台机器狗共用一个 mock 适配器角色
     dogs = {"dog_a": MockAdapter("dog_a"), "dog_b": MockAdapter("dog_b")}
-    h = Harness(adapters=dogs)
+    h = Harness(adapters=dogs, intent_interpreter=intent_interpreter)
 
     # ── 链路一:任务→黑板→多Agent bid→判给→安全check(R0)→执行→回执→Trace ──
     print("\n【链路一 · happy path】")
@@ -232,10 +262,20 @@ def run() -> Harness:
 
     print("\n" + "=" * 70)
     print("L0 契约级跑通 ✓ —— 契约自洽/依赖不打架/主循环顺序对/两链路结构成立")
-    print("(未证明:真LLM涌现/并发一致/物理执行/弱网 —— 见 skeleton 顶部说明)")
+    if offline:
+        print("(未证明:真实LLM意图解析/真LLM涌现/并发一致/物理执行/弱网)")
+    else:
+        print("(已接真实LLM意图解析；未证明:真LLM涌现/并发一致/物理执行/弱网)")
     print("=" * 70)
     return h
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="运行群体 Agent walking skeleton")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="显式跳过模型 API，仅验证确定性契约链路",
+    )
+    args = parser.parse_args()
+    run(offline=args.offline)
