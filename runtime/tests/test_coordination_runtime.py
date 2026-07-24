@@ -51,14 +51,24 @@ class CoordinationRuntimeTest(unittest.TestCase):
         live_events: list[dict] = []
         live_statuses: list[dict] = []
         live_sessions: list[dict] = []
+        live_tool_calls: list[dict] = []
         result = runtime.run(
             "帮我找公园里走失的白色萨摩耶",
             event_listener=live_events.append,
             status_listener=live_statuses.append,
             session_listener=live_sessions.append,
+            tool_listener=live_tool_calls.append,
         )
 
         self.assertEqual("ok", result["status"])
+        self.assertEqual(
+            "whx_tool_runtime",
+            result["runtime"]["physical_gateway"],
+        )
+        self.assertEqual(
+            "asset_skill_reference_provider",
+            result["runtime"]["skill_provider"],
+        )
         self.assertEqual("done", result["task"]["status"])
         self.assertEqual("dog-a", result["task"]["winner"])
         self.assertEqual("task_done", result["completion"]["terminal_event_type"])
@@ -99,6 +109,36 @@ class CoordinationRuntimeTest(unittest.TestCase):
         self.assertEqual(2, len(cleared))
         self.assertTrue(all(not item["exists"] for item in cleared))
         self.assertTrue(all(item["session"] is None for item in cleared))
+        self.assertEqual(
+            result["execution"]["tool_calls"],
+            live_tool_calls,
+        )
+        self.assertEqual(1, len(live_tool_calls))
+        self.assertEqual("G01", live_tool_calls[0]["tool_id"])
+        self.assertTrue(live_tool_calls[0]["success"])
+        self.assertEqual(
+            "available",
+            live_tool_calls[0]["binding"]["status"],
+        )
+        self.assertEqual(
+            [result["execution"]["intent"]["intent_id"]],
+            result["execution"]["dispatched_intent_ids_by_device"]["dog-a"],
+        )
+        self.assertEqual(
+            [],
+            result["execution"]["dispatched_intent_ids_by_device"]["dog-b"],
+        )
+        references = result["execution"]["skill_references_by_device"]
+        self.assertTrue(references["dog-a"])
+        self.assertTrue(references["dog-b"])
+        self.assertIn(
+            "safe_search_execution:battery_aware_navigation",
+            {item["skill_id"] for item in references["dog-a"]},
+        )
+        self.assertEqual(
+            references["dog-a"],
+            live_tool_calls[0]["skill_references"],
+        )
 
 
 if __name__ == "__main__":

@@ -23,8 +23,9 @@ from ..contracts.types import DeviceCandidate, TaskRequirement
 class Registry:
     """内存注册表(MVP)。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, emit_console: bool = True) -> None:
         self._cards: dict[str, AgentCard] = {}
+        self._emit_console = emit_console
 
     def register(self, card: AgentCard) -> None:
         card.extra["card_version"] = max(1, int(card.extra.get("card_version", 0)))
@@ -32,9 +33,10 @@ class Registry:
             card.state.extra.get("state_updated_at") or time.time()
         )
         self._cards[card.identity.device_id] = card
-        print(f"  [注册] 设备 {card.identity.device_id}"
-              f"({card.identity.device_type.value}) → Agent 化,能力"
-              f"{card.capability.atomic_tools}")
+        if self._emit_console:
+            print(f"  [注册] 设备 {card.identity.device_id}"
+                  f"({card.identity.device_type.value}) → Agent 化,能力"
+                  f"{card.capability.atomic_tools}")
 
     def refresh(self, device_id: str, card: AgentCard) -> None:
         """能力变化(挂新载荷)时刷新(listChanged 抽象)。"""

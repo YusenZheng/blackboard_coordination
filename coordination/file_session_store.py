@@ -30,9 +30,34 @@ def safe_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _io_path(path: Path) -> Path:
+    """Use an extended-length path on Windows without changing store layout."""
+    if os.name != "nt":
+        return path
+    value = str(path.resolve())
+    if value.startswith("\\\\?\\"):
+        return Path(value)
+    if value.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + value[2:])
+    return Path("\\\\?\\" + value)
+
+
+def _path_exists(path: Path) -> bool:
+    return _io_path(path).exists()
+
+
+def _unlink(path: Path) -> None:
+    _io_path(path).unlink()
+
+
 def _atomic_write_json(path: Path, value: Any) -> None:
+    path = _io_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    # Outbox/task keys are already SHA-256 names. Repeating the full key in the
+    # temporary filename can exceed legacy Win32 MAX_PATH before os.replace().
+    temp = path.with_name(
+        f".{path.stem[:12]}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
     encoded = json.dumps(
         to_json_value(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -44,6 +69,7 @@ def _atomic_write_json(path: Path, value: Any) -> None:
 
 
 def _read_json(path: Path, default: Any) -> Any:
+    path = _io_path(path)
     if not path.exists():
         return default
     with path.open("r", encoding="utf-8") as handle:
@@ -147,7 +173,7 @@ class FileOutboxStore:
         rejected_path = self.root / "rejected" / f"{key}.json"
         payload = _record_to_dict(event, source_offset)
         with self._lock:
-            if rejected_path.exists():
+            if _path_exists(rejected_path):
                 raise ValueError("OUTBOX_EVENT_PREVIOUSLY_REJECTED")
             existing = _read_json(path, None)
             if existing is None:
@@ -168,8 +194,8 @@ class FileOutboxStore:
     def resolve_event(self, idempotency_key: str) -> None:
         path = self.outbox_root / f"{safe_key(idempotency_key)}.json"
         with self._lock:
-            if path.exists():
-                path.unlink()
+            if _path_exists(path):
+                _unlink(path)
 
     def has_pending_events(self) -> bool:
         with self._lock:
@@ -186,7 +212,7 @@ class FileOutboxStore:
                 return
             value["append_rejection"] = to_json_value(result)
             _atomic_write_json(rejected_path, value)
-            path.unlink()
+            _unlink(path)
 
 
 class FileTaskSessionStore(FileOutboxStore):
@@ -272,7 +298,7 @@ class FileTaskSessionStore(FileOutboxStore):
         rejected_path = self._task_root(task_id) / "rejected" / f"{key}.json"
         payload = _record_to_dict(event, source_offset)
         with self._lock:
-            if rejected_path.exists():
+            if _path_exists(rejected_path):
                 raise ValueError("OUTBOX_EVENT_PREVIOUSLY_REJECTED")
             existing = _read_json(path, None)
             if existing is None:
@@ -302,8 +328,8 @@ class FileTaskSessionStore(FileOutboxStore):
     def resolve_task_event(self, task_id: str, idempotency_key: str) -> None:
         path = self._task_root(task_id) / "outbox" / f"{safe_key(idempotency_key)}.json"
         with self._lock:
-            if path.exists():
-                path.unlink()
+            if _path_exists(path):
+                _unlink(path)
 
     def reject_task_event(self, task_id: str, idempotency_key: str, result: Any) -> None:
         key = safe_key(idempotency_key)
@@ -315,7 +341,7 @@ class FileTaskSessionStore(FileOutboxStore):
                 return
             value["append_rejection"] = to_json_value(result)
             _atomic_write_json(rejected_path, value)
-            path.unlink()
+            _unlink(path)
 
     def store_raw_receipt(self, task_id: str, intent_id: str, receipt: Any) -> None:
         path = self._task_root(task_id) / "raw_receipts" / f"{safe_key(intent_id)}.json"
@@ -325,8 +351,8 @@ class FileTaskSessionStore(FileOutboxStore):
     def remove_raw_receipt(self, task_id: str, intent_id: str) -> None:
         path = self._task_root(task_id) / "raw_receipts" / f"{safe_key(intent_id)}.json"
         with self._lock:
-            if path.exists():
-                path.unlink()
+            if _path_exists(path):
+                _unlink(path)
 
     def cleanup_task(self, task_id: str) -> bool:
         """Remove a terminal task only after its task-local durable files converge."""
@@ -336,14 +362,15 @@ class FileTaskSessionStore(FileOutboxStore):
                 return False
             if any((root / "raw_receipts").glob("*.json")):
                 return False
-            if not root.exists():
+            if not _path_exists(root):
                 return True
             for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-                if child.is_file():
-                    child.unlink()
-                elif child.is_dir():
-                    child.rmdir()
-            root.rmdir()
+                io_child = _io_path(child)
+                if io_child.is_file():
+                    io_child.unlink()
+                elif io_child.is_dir():
+                    io_child.rmdir()
+            _io_path(root).rmdir()
             return True
 
 

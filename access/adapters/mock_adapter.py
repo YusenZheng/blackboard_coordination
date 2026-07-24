@@ -11,10 +11,15 @@ from .base import BaseAdapter
 
 
 class MockAdapter(BaseAdapter):
+    def __init__(self, device_id: str, *, emit_console: bool = True) -> None:
+        super().__init__(device_id)
+        self._emit_console = emit_console
+
     def execute(self, intent: ActionIntent) -> ActionReceipt:
         cmd = self.translate(intent.verb, intent.params)
-        print(f"  [执行] 设备 {self.device_id} 执行 {intent.verb.value} "
-              f"参数={intent.params}")
+        if self._emit_console:
+            print(f"  [执行] 设备 {self.device_id} 执行 {intent.verb.value} "
+                  f"参数={intent.params}")
         return ActionReceipt(intent_id=intent.intent_id, device_id=self.device_id,
                              success=True, result={"cmd": cmd}, duration_s=0.1)
 

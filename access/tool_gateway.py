@@ -17,6 +17,7 @@ from __future__ import annotations
 from enum import Enum
 
 from ..contracts.task import ActionIntent, ActionReceipt
+from ..contracts.tooling import ToolCallRequest
 
 
 class ToolClass(str, Enum):
@@ -35,13 +36,16 @@ class ToolGateway:
         estop_bus=None,
         *,
         device_registry=None,
+        blackboard=None,
         trace_listener=None,
     ):
         self._adapters = adapters or {}   # device_id -> AdapterPort
         self._estop = estop_bus           # B1:急停总线,下发前查
         self._device_registry = device_registry
+        self._blackboard = blackboard
         self._trace_listener = trace_listener
         self._runtime = None
+        self.dispatched_intent_ids: list[str] = []
         # Tool 注册表:call_tool 从这里查具体 Tool(而非靠前缀猜)
         if tool_registry is None:
             from .tools.base import load_builtin_tools
@@ -49,65 +53,120 @@ class ToolGateway:
         self._registry = tool_registry
         self.catalog = tool_registry
 
-    def dispatch(self, intent: ActionIntent) -> ActionReceipt:
-        """把【已过安全校验】的动作意图(G 系列)翻译成设备指令、收回执。
+    def is_available(self, device_id: str, verb: str) -> bool:
+        """Resolve a coordination action verb through the WHX Tool catalog."""
+        if self._estop is not None and self._estop.is_stopped(device_id):
+            return False
+        return self._tool_runtime().is_available(device_id, verb)
 
-        TODO(接缝·归一层缺失):当前 dispatch 走 intent.verb + device_id 直接找 adapter,
-            call_tool 走 tool_id 找 ToolRegistry —— 两条入口不相交。
-            协同层产出 ActionIntent(verb=ActionVerb 枚举,如 move_to),但 ToolSpec 用 tool_id
-            索引(如 G01),二者之间【无 verb→tool_id 映射】,params 键也不归一
-            (意图侧 target vs ToolSpec 侧 destination)。
-            需补:verb→tool_id 归一 + params 键归一,让 dispatch 能落到 ToolSpec。
-            前置:命名词表要先锁一套(Card 能力 / TaskRequirement / ActionVerb / tool_id 现为三套),
-            词表由总监拍定后再实现此映射(改契约走审批)。
-        """
+    def dispatch(self, intent: ActionIntent) -> ActionReceipt:
+        """把已过安全校验的 ActionIntent 归一为 WHX ToolRuntime 调用。"""
         # B1 设备侧硬门控:急停生效期间,任何动作下发前被拦(急停后不再照发下一个 intent)
         if self._estop is not None and self._estop.is_stopped(intent.device_id):
             return ActionReceipt(intent_id=intent.intent_id, device_id=intent.device_id,
                                  success=False, failure_reason="设备处于急停状态,拒绝执行",
-                                 recovery_class="need_human")
-        adapter = self._adapters.get(intent.device_id)
-        if adapter is None:
-            return ActionReceipt(intent_id=intent.intent_id, device_id=intent.device_id,
-                                 success=False, failure_reason="no adapter for device",
-                                 recovery_class="need_reassign")
-        receipt = adapter.execute(intent)
-        tool_id = {"move_to": "G01"}.get(getattr(intent.verb, "value", intent.verb))
-        if tool_id:
-            receipt.extra.setdefault("tool_id", tool_id)
-        if intent.extra.get("skill_references"):
-            receipt.extra["skill_references"] = intent.extra["skill_references"]
-        if self._trace_listener is not None:
-            try:
-                self._trace_listener({
-                    "trace_id": intent.extra.get("trace_id", intent.intent_id),
-                    "call_id": intent.intent_id,
-                    "task_id": intent.task_id,
-                    "device_id": intent.device_id,
-                    "tool_id": tool_id,
-                    "success": receipt.success,
-                    "binding": {
-                        "device_id": intent.device_id,
-                        "tool_id": tool_id,
-                        "status": "available",
-                    },
-                    "skill_references": intent.extra.get("skill_references", []),
-                })
-            except Exception:
-                pass
-        return receipt
+                                 recovery_class="need_human",
+                                 extra={"outcome_certainty": "confirmed"})
+
+        spec = self._registry.for_action_verb(intent.verb)
+        if spec is None:
+            return ActionReceipt(
+                intent_id=intent.intent_id,
+                device_id=intent.device_id,
+                success=False,
+                failure_reason=f"no Tool registered for action verb {intent.verb.value}",
+                recovery_class="unrecoverable",
+                extra={"outcome_certainty": "confirmed"},
+            )
+
+        arguments = dict(intent.params)
+        # G01 历史 IO 使用 destination；v2 ActionIntent 使用 target。
+        if "target" in arguments and "destination" not in arguments:
+            arguments["destination"] = arguments["target"]
+        arguments.setdefault("device", intent.device_id)
+        result = self._tool_runtime().invoke(
+            ToolCallRequest(
+                schema_version="2.0",
+                call_id=intent.intent_id,
+                tool_id=spec.tool_id,
+                arguments=arguments,
+                task_id=intent.task_id,
+                agent_id=intent.device_id,
+                device_id=intent.device_id,
+                trace_id=str(intent.extra.get("trace_id", intent.intent_id)),
+                attempt=int(intent.extra.get("attempt", 1)),
+                idempotency_key=intent.intent_id,
+                action_intent=intent,
+                context={
+                    "skill_references": list(
+                        intent.extra.get("skill_references", [])
+                    )
+                },
+            )
+        )
+        if result.receipt is not None:
+            receipt = result.receipt
+            receipt.extra.setdefault("tool_id", result.tool_id)
+            receipt.extra.setdefault("outcome_certainty", result.outcome_certainty)
+            if intent.extra.get("skill_references"):
+                receipt.extra["skill_references"] = intent.extra["skill_references"]
+            if intent.intent_id not in self.dispatched_intent_ids:
+                self.dispatched_intent_ids.append(intent.intent_id)
+            return receipt
+
+        binding = result.binding
+        binding_snapshot = (
+            {
+                "device_id": binding.device_id,
+                "tool_id": binding.tool_id,
+                "executor_id": binding.executor_id,
+                "adapter_id": binding.adapter_id,
+                "status": binding.status,
+                "reason_codes": list(binding.reason_codes),
+            }
+            if binding is not None
+            else None
+        )
+        recovery_class = (
+            "need_human"
+            if result.outcome_certainty == "unknown"
+            else "need_reassign"
+            if result.error_code in {"UNAVAILABLE", "EXECUTION_FAILED"}
+            else "unrecoverable"
+        )
+        return ActionReceipt(
+            intent_id=intent.intent_id,
+            device_id=intent.device_id,
+            success=False,
+            failure_reason=result.error_message or result.error_code,
+            recovery_class=recovery_class,
+            duration_s=max(0.0, result.duration_ms / 1000.0),
+            extra={
+                "tool_id": result.tool_id,
+                "tool_error_code": result.error_code,
+                "tool_binding": binding_snapshot,
+                "outcome_certainty": result.outcome_certainty,
+                "skill_references": list(
+                    intent.extra.get("skill_references", [])
+                ),
+            },
+        )
 
     def invoke(self, request):
         """统一 Tool 调用入口；旧 dispatch/call_tool API 保持兼容。"""
+        return self._tool_runtime().invoke(request)
+
+    def _tool_runtime(self):
         if self._runtime is None:
             from .tool_runtime import ToolRuntime
             self._runtime = ToolRuntime(
                 catalog=self._registry,
                 device_registry=self._device_registry,
                 adapters=self._adapters,
+                blackboard=self._blackboard,
                 trace_listener=self._trace_listener,
             )
-        return self._runtime.invoke(request)
+        return self._runtime
 
     def call_tool(self, tool_id: str, params: dict) -> dict:
         """调用五类 Tool 之一:先查注册表,注册了就调它的 run;没注册按类给占位。"""

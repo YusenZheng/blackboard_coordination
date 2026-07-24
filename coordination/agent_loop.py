@@ -288,6 +288,11 @@ class PureAgentLoop:
             plan_id=str(content["plan_id"]),
             assignment=assignment,
         )
+        # Skill 是决策参考，不改写 canonical intent fingerprint；把本轮命中的
+        # 引用作为执行上下文透传给 ToolRuntime，供 trace/审计关联。
+        submit.intent.extra["skill_references"] = to_json_value(
+            loop_input.skill_references
+        )
         if session.current_intent and session.current_intent.intent_id == submit.intent.intent_id:
             if session.current_intent.state in (
                 IntentState.DISPATCHING,

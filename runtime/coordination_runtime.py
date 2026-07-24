@@ -10,14 +10,18 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from ..access.adapters.mock_adapter import MockAdapter
+from ..access.registry import Registry
+from ..access.tool_gateway import ToolGateway
+from ..access.tools.base import load_builtin_tools
+from ..assets.skill import load_builtin_skills
 from ..blackboard.board import Blackboard
+from ..contracts.agent_card import AgentCard, CapabilitySlot
 from ..contracts.blackboard_event import Ledger
+from ..contracts.types import CapabilityProfile, DeviceRef, DeviceState, DeviceType
+from ..contracts.verbs import ActionVerb
 from ..coordination.action_executor import ActionExecutor
-from ..coordination.adapters import (
-    MockPhysicalActionGateway,
-    NullSkillReferenceProvider,
-    StaticSafetyPort,
-)
+from ..coordination.adapters import StaticSafetyPort
 from ..coordination.agent_loop import PureAgentLoop
 from ..coordination.agent_process import AgentProcessHost
 from ..coordination.blackboard_client import BlackboardClient
@@ -30,6 +34,8 @@ from ..coordination.models import (
     AgentProcessSpec,
     CandidateAssignmentPlan,
     CoordinationEventType,
+    SkillQuery,
+    SkillReference,
     event_type_value,
     make_blackboard_event,
     to_json_value,
@@ -37,6 +43,7 @@ from ..coordination.models import (
 from ..coordination.ports import (
     GroupPlanningPolicyPort,
     LocalProposalPolicyPort,
+    SkillReferencePort,
 )
 from ..ingress.task_gen import (
     IntentInterpreterPort,
@@ -50,6 +57,7 @@ from .deepseek import (
     DeepSeekIntentInterpreter,
     DeepSeekLocalProposalPolicy,
 )
+from .skill_reference_provider import AssetSkillReferenceProvider
 
 
 @dataclass(frozen=True)
@@ -118,6 +126,23 @@ class ObservedGroupPlanningPolicy:
             raise
 
 
+class ObservedSkillReferenceProvider:
+    """Expose the actual Asset Skill references supplied to one v2 Agent."""
+
+    def __init__(
+        self,
+        device_id: str,
+        inner: SkillReferencePort,
+    ) -> None:
+        self.device_id = device_id
+        self.inner = inner
+        self.references: list[SkillReference] = []
+
+    def search(self, query: SkillQuery, limit: int = 3) -> list[SkillReference]:
+        self.references = list(self.inner.search(query, limit))
+        return list(self.references)
+
+
 LocalPolicyFactory = Callable[[str], Optional[LocalProposalPolicyPort]]
 RuntimeListener = Callable[[dict], None]
 
@@ -172,12 +197,19 @@ class CoordinationRuntime:
         status_listener: Optional[RuntimeListener] = None,
         llm_listener: Optional[RuntimeListener] = None,
         session_listener: Optional[RuntimeListener] = None,
+        tool_listener: Optional[RuntimeListener] = None,
     ) -> dict:
         if not instruction.strip():
             raise ValueError("instruction is required")
         self._llm_listener = llm_listener
         self._attach_llm_listener(self.intent_interpreter, llm_listener)
         self._attach_llm_listener(self.group_policy, llm_listener)
+        tool_traces: list[dict] = []
+
+        def record_tool_trace(payload: dict) -> None:
+            value = to_json_value(payload)
+            tool_traces.append(value)
+            _notify(tool_listener, value)
 
         _notify(
             status_listener,
@@ -243,7 +275,8 @@ class CoordinationRuntime:
 
         observed_group = ObservedGroupPlanningPolicy(self.group_policy)
         with tempfile.TemporaryDirectory(
-            prefix="swarmbrain-coordination-"
+            # Keep the durable outbox path below legacy Win32 MAX_PATH.
+            prefix="sb-v2-"
         ) as work_root:
             coordinator = Coordinator(
                 blackboard=client,
@@ -252,7 +285,11 @@ class CoordinationRuntime:
                 bid_window_s=self.bid_window_s,
                 group_policy_timeout_s=self.deepseek_config.timeout_s,
             )
-            hosts = self._build_hosts(client, work_root)
+            hosts = self._build_hosts(
+                client,
+                work_root,
+                tool_trace_listener=record_tool_trace,
+            )
 
             _notify(
                 status_listener,
@@ -367,6 +404,10 @@ class CoordinationRuntime:
                 device_id: host.store.load_session(task_payload["task_id"]) is None
                 for device_id, host in hosts.items()
             }
+            skill_references_by_device = {
+                device_id: to_json_value(host.skill_provider.references)
+                for device_id, host in hosts.items()
+            }
             self._publish_sessions(
                 session_listener,
                 hosts,
@@ -427,7 +468,9 @@ class CoordinationRuntime:
                 "contract": "coordination-v2",
                 "process_mode": "single_process_in_memory",
                 "model": self.deepseek_config.model,
-                "physical_gateway": "mock",
+                "physical_gateway": "whx_tool_runtime",
+                "physical_adapter": "mock",
+                "skill_provider": "asset_skill_reference_provider",
                 "device_ids": [item.device_id for item in self.devices],
             },
             "task": {
@@ -464,6 +507,8 @@ class CoordinationRuntime:
                 "intent": intents.get(intent_id) if intent_id else None,
                 "receipt": receipts.get(intent_id) if intent_id else None,
                 "safety_intercepts": action_view["intercepts_by_intent"],
+                "tool_calls": tool_traces,
+                "skill_references_by_device": skill_references_by_device,
             },
             "completion": {
                 "coordinator_processed_events": terminal_events_processed,
@@ -492,11 +537,37 @@ class CoordinationRuntime:
         return result
 
     def _build_hosts(
-        self, client: BlackboardClient, work_root: str
+        self,
+        client: BlackboardClient,
+        work_root: str,
+        *,
+        tool_trace_listener: Optional[RuntimeListener] = None,
     ) -> dict[str, AgentProcessHost]:
+        tool_catalog = load_builtin_tools()
+        device_registry = Registry(emit_console=False)
+        for device in self.devices:
+            device_registry.register(
+                _device_agent_card(device, tool_catalog)
+            )
+        skill_provider = AssetSkillReferenceProvider(
+            load_builtin_skills(),
+            tool_catalog,
+        )
+
         hosts: dict[str, AgentProcessHost] = {}
         for device in self.devices:
-            gateway = MockPhysicalActionGateway()
+            gateway = ToolGateway(
+                adapters={
+                    device.device_id: MockAdapter(
+                        device.device_id,
+                        emit_console=False,
+                    )
+                },
+                tool_registry=tool_catalog,
+                device_registry=device_registry,
+                blackboard=client,
+                trace_listener=tool_trace_listener,
+            )
             local_policy = self.local_policy_factory(device.device_id)
             hosts[device.device_id] = AgentProcessHost(
                 spec=AgentProcessSpec(
@@ -514,7 +585,10 @@ class CoordinationRuntime:
                     gateway=gateway,
                 ),
                 action_gateway=gateway,
-                skill_provider=NullSkillReferenceProvider(),
+                skill_provider=ObservedSkillReferenceProvider(
+                    device.device_id,
+                    skill_provider,
+                ),
                 local_proposal_policy=local_policy,
             )
         return hosts
@@ -586,6 +660,32 @@ class CoordinationRuntime:
         actual = [item["type"] for item in result["blackboard"]["events"]]
         if actual != expected:
             raise RuntimeError(f"unexpected event sequence: {actual}")
+
+
+def _device_agent_card(device: DeviceRuntimeConfig, tool_catalog) -> AgentCard:
+    action_verbs = [ActionVerb(value) for value in device.action_verbs]
+    atomic_tools = [
+        spec.tool_id
+        for spec in tool_catalog.list()
+        if spec.action_verb in device.action_verbs
+    ]
+    return AgentCard(
+        identity=DeviceRef(device.device_id, DeviceType.DOG),
+        state=DeviceState(
+            battery=device.battery,
+            endurance_s=device.endurance_s,
+            online=True,
+            healthy=True,
+        ),
+        capability=CapabilitySlot(
+            action_verbs=action_verbs,
+            atomic_tools=atomic_tools,
+            profile=CapabilityProfile(
+                capabilities=list(device.capabilities),
+                width_cm=40,
+            ),
+        ),
+    )
 
 
 def _candidate_matches_committed(
