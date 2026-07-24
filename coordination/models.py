@@ -340,6 +340,9 @@ class GroupPlanningInput:
     task_revision: int
     coordination_epoch: int
     input_fingerprint: str
+    # Approved shared facts only.  Private Agent memory is never part of the
+    # coordinator planning input.
+    shared_memory: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -396,6 +399,7 @@ class SkillReference:
     strategy_summary: str
     applicable_conditions: list[str]
     source_ref: str
+    tool_chain: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -456,6 +460,7 @@ class LoopInput:
     execution_availability: list[ExecutionAvailability]
     skill_references: list[SkillReference]
     local_proposal: Optional[CollaborationProposal]
+    memory_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -534,6 +539,7 @@ def make_blackboard_event(
     confidence: Optional[float] = None,
     ttl: Optional[float] = None,
     event_id: Optional[str] = None,
+    trace_carrier: Optional[dict[str, str]] = None,
 ) -> BlackboardEvent:
     type_value = enum_value(event_type)
     try:
@@ -550,6 +556,7 @@ def make_blackboard_event(
         confidence=confidence,
         ttl=ttl,
         idempotency_key=idempotency_key,
+        trace_carrier=dict(trace_carrier or {}),
     )
 
 

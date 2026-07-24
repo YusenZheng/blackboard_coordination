@@ -3,5 +3,10 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
-runtime_data/
+.venv/
 
+# Local runtime state and secrets.
+runtime_data/
+.env
+.env.*
+!.env.example

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+import time
 from typing import Any, Optional
 
 from ..contracts.blackboard_event import BlackboardEvent
@@ -29,8 +31,9 @@ class ViewNotCaughtUpError(BlackboardContractError):
 
 
 class BlackboardClient:
-    def __init__(self, backend: Any) -> None:
+    def __init__(self, backend: Any, observability: Any = None) -> None:
         self.backend = backend
+        self.observability = observability
 
     def now(self) -> float:
         value = float(self.backend.now())
@@ -45,7 +48,104 @@ class BlackboardClient:
         return value
 
     def append(self, event: BlackboardEvent) -> AppendResult:
-        return normalize_append_result(self.backend.append(event), event.id)
+        started = time.perf_counter()
+        if not event.trace_carrier and self.observability is not None:
+            inject = getattr(self.observability, "inject_carrier", None)
+            if callable(inject):
+                try:
+                    event.trace_carrier = dict(inject() or {})
+                except Exception:
+                    # Trace propagation must never change Blackboard semantics.
+                    pass
+        span_factory = getattr(self.observability, "span", None)
+        span_context = nullcontext(None)
+        if callable(span_factory):
+            try:
+                span_context = span_factory(
+                    "blackboard.event.append",
+                    attributes={
+                        "event.id": event.id,
+                        "event.type": event_type_value(event),
+                        "event.source": event.source,
+                        "task.id": str(event.content.get("task_id", "")),
+                    },
+                    input_payload=event.content,
+                )
+            except Exception:
+                pass
+        with span_context as span:
+            try:
+                result = normalize_append_result(
+                    self.backend.append(event), event.id
+                )
+                if span is not None:
+                    span.set_attribute(
+                        "blackboard.append.status", str(result.status.value)
+                    )
+                    span.set_attribute(
+                        "blackboard.append.accepted", bool(result.accepted)
+                    )
+                    span.set_output(
+                        {
+                            "offset": result.offset,
+                            "version": result.version,
+                            "status": result.status.value,
+                        }
+                    )
+            except Exception as exc:
+                if span is not None:
+                    span.record_exception(exc)
+                raise
+        if self.observability is not None:
+            record = getattr(self.observability, "event", None)
+            if callable(record):
+                try:
+                    record(
+                        "blackboard.event.append",
+                        attributes={
+                            "event.id": event.id,
+                            "event.type": event_type_value(event),
+                            "event.source": event.source,
+                            "blackboard.append.status": str(result.status.value),
+                            "blackboard.append.accepted": bool(result.accepted),
+                            "blackboard.offset": result.offset,
+                            "blackboard.version": result.version,
+                        },
+                        payload=event.content,
+                        level="INFO" if result.accepted else "WARNING",
+                    )
+                except Exception:
+                    pass
+            histogram = getattr(self.observability, "histogram", None)
+            counter = getattr(self.observability, "counter", None)
+            metric_attributes = {
+                "event.type": event_type_value(event),
+                "status": str(result.status.value),
+                "accepted": str(bool(result.accepted)).lower(),
+            }
+            if callable(histogram):
+                try:
+                    histogram(
+                        "blackboard.append.duration_ms",
+                        (time.perf_counter() - started) * 1000.0,
+                        attributes=metric_attributes,
+                    )
+                except Exception:
+                    pass
+            if callable(counter):
+                try:
+                    counter(
+                        "blackboard.append.count",
+                        attributes=metric_attributes,
+                    )
+                    if not result.accepted:
+                        counter(
+                            "blackboard.append.rejected.count",
+                            attributes={"status": str(result.status.value)},
+                        )
+                except Exception:
+                    pass
+        return result
 
     def read_since(
         self,

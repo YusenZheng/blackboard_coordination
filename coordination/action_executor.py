@@ -6,6 +6,7 @@ PureAgentLoop 不调用本模块依赖的 I/O。Host 执行 submit_action_intent
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any, Callable, Optional
 
 from ..contracts.blackboard_event import BlackboardEvent, Ledger
@@ -120,6 +121,7 @@ class ActionExecutor:
         store_raw_receipt: Optional[Callable[[str, str, Any], None]] = None,
         remove_raw_receipt: Optional[Callable[[str, str], None]] = None,
         on_dispatching: Optional[Callable[[SubmitActionIntentPayload], None]] = None,
+        observability: Any = None,
     ) -> None:
         self.safety = safety
         self.gateway = gateway
@@ -127,15 +129,53 @@ class ActionExecutor:
         self.store_raw_receipt = store_raw_receipt
         self.remove_raw_receipt = remove_raw_receipt
         self.on_dispatching = on_dispatching
+        self.observability = observability
 
     def execute(self, payload: SubmitActionIntentPayload) -> ActionExecutionResult:
-        self._validate_payload(payload)
-        if self.publish_event is None:
-            raise RuntimeError("ACTION_EVENT_PUBLISHER_NOT_CONFIGURED")
-        intent_event = self._intent_event(payload)
+        with _span(
+            self.observability,
+            "action.intent.build",
+            {
+                "task.id": payload.intent.task_id or "",
+                "device.id": payload.intent.device_id,
+                "intent.id": payload.intent.intent_id,
+            },
+            input_payload=payload,
+        ) as span:
+            try:
+                self._validate_payload(payload)
+                if self.publish_event is None:
+                    raise RuntimeError("ACTION_EVENT_PUBLISHER_NOT_CONFIGURED")
+                intent_event = self._intent_event(payload)
+                span.set_output(intent_event)
+            except Exception as exc:
+                span.record_exception(exc)
+                raise
         append_results = [self.publish_event(intent_event)]
 
-        pre = self.safety.pre_check(payload.intent)
+        with _span(
+            self.observability,
+            "safety.pre_check",
+            {
+                "task.id": payload.intent.task_id or "",
+                "device.id": payload.intent.device_id,
+                "intent.id": payload.intent.intent_id,
+            },
+            input_payload=payload.intent,
+        ) as span:
+            try:
+                pre = self.safety.pre_check(payload.intent)
+                span.set_output(pre)
+                if not pre.allowed:
+                    span.record_exception(
+                        RuntimeError(
+                            "safety pre-check intercepted action: "
+                            f"{pre.reason_code}"
+                        )
+                    )
+            except Exception as exc:
+                span.record_exception(exc)
+                raise
         self._validate_pre_verdict(pre)
         if not pre.allowed:
             intercept = self._intercept_event(payload, pre, "pre")
@@ -145,16 +185,30 @@ class ActionExecutor:
         if self.on_dispatching is not None:
             self.on_dispatching(payload)
 
+        _inject_trace_identity(self.observability, payload.intent)
         dispatch_unknown = False
-        try:
-            receipt = self.gateway.dispatch(payload.intent)
-            if receipt.intent_id != payload.intent.intent_id or receipt.device_id != payload.intent.device_id:
+        with _span(
+            self.observability,
+            "tool.gateway.dispatch",
+            {
+                "task.id": payload.intent.task_id or "",
+                "device.id": payload.intent.device_id,
+                "intent.id": payload.intent.intent_id,
+                "action.verb": enum_value(payload.intent.verb),
+            },
+            input_payload=payload.intent.params,
+        ) as span:
+            try:
+                receipt = self.gateway.dispatch(payload.intent)
+                if receipt.intent_id != payload.intent.intent_id or receipt.device_id != payload.intent.device_id:
+                    dispatch_unknown = True
+                    receipt = receipt_from_unknown(payload.intent)
+                    receipt.failure_reason = "RECEIPT_CONTEXT_MISMATCH"
+                span.set_output(receipt)
+            except Exception as exc:
+                span.record_exception(exc)
                 dispatch_unknown = True
                 receipt = receipt_from_unknown(payload.intent)
-                receipt.failure_reason = "RECEIPT_CONTEXT_MISMATCH"
-        except Exception:
-            dispatch_unknown = True
-            receipt = receipt_from_unknown(payload.intent)
 
         if self.store_raw_receipt is not None:
             self.store_raw_receipt(payload.intent.task_id or "", payload.intent.intent_id, receipt)
@@ -168,8 +222,30 @@ class ActionExecutor:
                 reason="dispatch result is not authoritative",
             )
         else:
-            post = self.safety.post_check(payload.intent, receipt)
-            self._validate_post_verdict(post)
+            with _span(
+                self.observability,
+                "safety.post_check",
+                {
+                    "task.id": payload.intent.task_id or "",
+                    "device.id": payload.intent.device_id,
+                    "intent.id": payload.intent.intent_id,
+                },
+                input_payload=receipt,
+            ) as span:
+                try:
+                    post = self.safety.post_check(payload.intent, receipt)
+                    self._validate_post_verdict(post)
+                    span.set_output(post)
+                    if not post.allowed:
+                        span.record_exception(
+                            RuntimeError(
+                                "safety post-check intercepted receipt: "
+                                f"{post.reason_code}"
+                            )
+                        )
+                except Exception as exc:
+                    span.record_exception(exc)
+                    raise
 
         intercept = None
         if not post.allowed:
@@ -181,7 +257,6 @@ class ActionExecutor:
         if self.remove_raw_receipt is not None:
             self.remove_raw_receipt(payload.intent.task_id or "", payload.intent.intent_id)
         return ActionExecutionResult(intent_event, intercept, receipt_event, append_results)
-
     @staticmethod
     def _validate_payload(payload: SubmitActionIntentPayload) -> None:
         if payload.step != 0 or payload.attempt != 1:
@@ -310,3 +385,47 @@ class ActionExecutor:
             payload.intent.device_id,
             f"receipt:{payload.intent.intent_id}",
         )
+
+
+class _NullSpan:
+    def set_output(self, payload: Any) -> None:
+        return None
+
+    def record_exception(self, exc: BaseException) -> None:
+        return None
+
+    def set_attribute(self, name: str, value: Any) -> None:
+        return None
+
+
+def _span(
+    observability: Any,
+    name: str,
+    attributes: Optional[dict[str, Any]] = None,
+    *,
+    input_payload: Any = None,
+):
+    factory = getattr(observability, "span", None)
+    if callable(factory):
+        try:
+            return factory(name, attributes=attributes, input_payload=input_payload)
+        except Exception:
+            pass
+    return nullcontext(_NullSpan())
+
+
+def _inject_trace_identity(observability: Any, intent: ActionIntent) -> None:
+    current_carrier = getattr(observability, "current_carrier", None)
+    if not callable(current_carrier):
+        return
+    try:
+        traceparent = str((current_carrier() or {}).get("traceparent", ""))
+        parts = traceparent.split("-")
+        if (
+            len(parts) == 4
+            and len(parts[1]) == 32
+            and all(item in "0123456789abcdefABCDEF" for item in parts[1])
+        ):
+            intent.extra.setdefault("trace_id", parts[1].lower())
+    except Exception:
+        pass

@@ -1,0 +1,2318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SwarmBrain · V2 协同可观测平台</title>
+  <style>
+    :root {
+      --bg: #edf4fc;
+      --panel: rgba(255, 255, 255, .94);
+      --panel-2: #f7faff;
+      --line: rgba(74, 101, 145, .16);
+      --text: #18263b;
+      --muted: #64748b;
+      --cyan: #0aa8bd;
+      --blue: #3974e9;
+      --purple: #7d56d9;
+      --orange: #e98b25;
+      --green: #159b6c;
+      --red: #d94758;
+      --shadow: 0 16px 42px rgba(55, 78, 115, .12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(74, 132, 239, .16), transparent 34%),
+        radial-gradient(circle at 92% 8%, rgba(128, 87, 217, .13), transparent 30%),
+        linear-gradient(180deg, #f7fbff 0, var(--bg) 48%, #e8f1fb 100%),
+        var(--bg);
+      font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+
+    .shell {
+      width: min(1560px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 26px 0 46px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 22px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 13px; }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border: 1px solid rgba(78, 216, 232, .38);
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      background: linear-gradient(145deg, rgba(78, 216, 232, .16), rgba(95, 140, 255, .08));
+      box-shadow: 0 0 30px rgba(10, 168, 189, .12);
+      font-weight: 800;
+      letter-spacing: -.06em;
+    }
+
+    h1 { margin: 0; font-size: 21px; letter-spacing: .01em; }
+    .subtitle { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    .live-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .72);
+      font-size: 12px;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #526078;
+    }
+
+    .live-pill.connected .live-dot {
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(75, 211, 155, .11), 0 0 14px rgba(75, 211, 155, .7);
+      animation: breathe 1.8s infinite;
+    }
+
+    @keyframes breathe { 50% { opacity: .48; } }
+
+    .command {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .8);
+      box-shadow: var(--shadow);
+    }
+
+    .command input {
+      width: 100%;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid rgba(151, 173, 211, .2);
+      border-radius: 11px;
+      outline: 0;
+      padding: 13px 15px;
+    }
+
+    .command input:focus {
+      border-color: rgba(78, 216, 232, .72);
+      box-shadow: 0 0 0 3px rgba(78, 216, 232, .08);
+    }
+
+    .command button {
+      border: 0;
+      border-radius: 11px;
+      padding: 0 22px;
+      min-height: 46px;
+      color: #04131d;
+      background: linear-gradient(135deg, var(--cyan), #72e4c3);
+      font-weight: 750;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(78, 216, 232, .18);
+    }
+
+    .command button:disabled { opacity: .5; cursor: wait; }
+
+    .history-bar {
+      display: grid;
+      grid-template-columns: auto minmax(260px, 1fr) auto auto;
+      gap: 10px;
+      align-items: center;
+      margin: 12px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .76);
+    }
+
+    .command select {
+      min-height: 46px;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid rgba(151, 173, 211, .2);
+      border-radius: 11px;
+      padding: 0 12px;
+    }
+
+    .history-bar label { color: var(--muted); font-size: 11px; }
+    .history-bar select, .history-bar button, .filter-row input, .filter-row select {
+      min-height: 36px;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid rgba(151, 173, 211, .28);
+      border-radius: 9px;
+      padding: 7px 10px;
+    }
+    .history-bar button, .candidate-actions button { cursor: pointer; }
+    .mode-pill {
+      padding: 6px 9px;
+      color: var(--blue);
+      background: rgba(57, 116, 233, .08);
+      border-radius: 999px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .stage-banner {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 42px;
+      margin: 12px 2px 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stage-icon {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--blue);
+      box-shadow: 0 0 16px rgba(95, 140, 255, .6);
+    }
+
+    .business-summary {
+      display: grid;
+      grid-template-columns: auto minmax(280px, 1.35fr) minmax(380px, 1fr);
+      gap: 18px;
+      align-items: center;
+      margin-bottom: 12px;
+      padding: 18px 20px;
+    }
+
+    .outcome-mark {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 15px;
+      color: var(--blue);
+      background: rgba(57, 116, 233, .1);
+      font-size: 23px;
+      font-weight: 800;
+    }
+
+    .outcome-mark.success {
+      color: var(--green);
+      background: rgba(21, 155, 108, .12);
+    }
+
+    .outcome-mark.error {
+      color: var(--red);
+      background: rgba(217, 71, 88, .11);
+    }
+
+    .outcome-title { font-size: 17px; font-weight: 780; }
+    .outcome-narrative { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+
+    .summary-facts {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(105px, .6fr) minmax(105px, .6fr);
+      gap: 10px;
+    }
+
+    .summary-fact {
+      min-width: 0;
+      padding: 10px 12px;
+      border-radius: 11px;
+      background: var(--panel-2);
+      border: 1px solid rgba(74, 101, 145, .1);
+    }
+
+    .summary-fact span { display: block; color: var(--muted); font-size: 9px; }
+    .summary-fact strong {
+      display: block;
+      overflow: hidden;
+      margin-top: 5px;
+      color: #2b405c;
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .metric {
+      min-height: 90px;
+      padding: 16px 17px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+    }
+
+    .metric-label { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .metric-value { margin-top: 9px; font-size: 25px; font-weight: 760; }
+    .metric-note { margin-top: 3px; color: var(--muted); font-size: 11px; }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      min-height: 52px;
+      padding: 0 17px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title { font-size: 13px; font-weight: 720; }
+    .panel-kicker { color: var(--muted); font-size: 11px; }
+
+    .flow-panel { padding-bottom: 16px; margin-bottom: 12px; }
+    .flow-scroll { overflow-x: auto; padding: 18px 17px 4px; scrollbar-width: thin; }
+
+    .flow {
+      min-width: 1160px;
+      display: grid;
+      grid-template-columns: repeat(9, minmax(104px, 1fr));
+      gap: 15px;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 78px;
+      padding: 13px 12px;
+      border: 1px solid rgba(151, 173, 211, .17);
+      border-radius: 12px;
+      background: #f7faff;
+      transition: border-color .25s, transform .25s, background .25s;
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: calc(100% + 1px);
+      width: 15px;
+      height: 1px;
+      background: rgba(151, 173, 211, .26);
+    }
+
+    .flow-step:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      top: calc(50% - 3px);
+      right: -16px;
+      border-left: 5px solid rgba(151, 173, 211, .35);
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+    }
+
+    .flow-step.done {
+      border-color: rgba(75, 211, 155, .52);
+      background: linear-gradient(145deg, rgba(21, 155, 108, .13), #f7faff 72%);
+    }
+
+    .flow-step.active {
+      transform: translateY(-3px);
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(10, 168, 189, .08), 0 10px 26px rgba(55, 78, 115, .14);
+    }
+
+    .flow-step.active::after { background: var(--cyan); }
+    .step-num { color: var(--muted); font-size: 10px; }
+    .step-name { margin-top: 8px; font-size: 12px; font-weight: 720; }
+    .step-count { margin-top: 5px; color: var(--muted); font-size: 10px; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.65fr) minmax(330px, .78fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .timeline {
+      height: 560px;
+      overflow: auto;
+      padding: 9px 17px 17px;
+      scrollbar-color: #314665 transparent;
+    }
+
+    .empty {
+      display: grid;
+      place-items: center;
+      min-height: 420px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    .event-row {
+      display: grid;
+      grid-template-columns: 46px 12px minmax(0, 1fr);
+      gap: 12px;
+      position: relative;
+      padding: 10px 0;
+      cursor: pointer;
+    }
+
+    .event-row:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 33px;
+      bottom: -10px;
+      left: 63px;
+      width: 1px;
+      background: rgba(151, 173, 211, .17);
+    }
+
+    .event-version {
+      color: var(--muted);
+      font-size: 11px;
+      text-align: right;
+      padding-top: 3px;
+    }
+
+    .event-dot {
+      z-index: 1;
+      width: 10px;
+      height: 10px;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: var(--orange);
+      box-shadow: 0 0 0 4px rgba(255, 177, 78, .09);
+    }
+
+    .event-card {
+      min-width: 0;
+      padding: 11px 13px;
+      border: 1px solid rgba(151, 173, 211, .14);
+      border-radius: 11px;
+      background: #f8fbff;
+    }
+
+    .event-top { display: flex; justify-content: space-between; gap: 15px; }
+    .event-type { font-size: 12px; font-weight: 760; color: #14233a; }
+    .event-source { color: var(--muted); font-size: 10px; }
+    .event-summary { margin-top: 7px; color: #53667f; font-size: 12px; line-height: 1.55; }
+
+    .side-stack { display: grid; gap: 12px; }
+    .side-body { padding: 15px 16px 17px; }
+
+    .agents { display: grid; grid-template-columns: 1fr; gap: 10px; }
+
+    .agent {
+      border: 1px solid rgba(151, 173, 211, .16);
+      border-radius: 12px;
+      padding: 13px;
+      background: #f8fbff;
+      transition: border-color .25s, background .25s;
+    }
+
+    .agent.winner {
+      border-color: rgba(75, 211, 155, .6);
+      background: linear-gradient(145deg, rgba(21, 155, 108, .12), #f8fbff);
+    }
+
+    .agent-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .agent-name { font-size: 13px; font-weight: 750; }
+
+    .badge {
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(143, 162, 191, .1);
+      font-size: 9px;
+    }
+
+    .badge.accept { color: var(--green); background: rgba(75, 211, 155, .11); }
+    .agent dl, .fact-grid { margin: 12px 0 0; display: grid; gap: 7px; }
+    .agent dl div, .fact { display: flex; justify-content: space-between; gap: 10px; }
+    dt, .fact-key { color: var(--muted); font-size: 10px; }
+    dd, .fact-value { margin: 0; color: #344962; font-size: 10px; text-align: right; }
+
+    .reason {
+      min-height: 54px;
+      color: #455b75;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .session-section {
+      display: block;
+      margin-top: 13px;
+      padding-top: 11px;
+      border-top: 1px solid rgba(74, 101, 145, .12);
+    }
+
+    .session-section > summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .04em;
+    }
+
+    .session-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .06em;
+    }
+
+    .session-title span:last-child {
+      color: var(--purple);
+      letter-spacing: 0;
+    }
+
+    .session-history {
+      display: grid;
+      gap: 6px;
+      margin-top: 9px;
+    }
+
+    .session-empty {
+      padding: 10px;
+      color: var(--muted);
+      background: rgba(57, 116, 233, .04);
+      border: 1px dashed rgba(74, 101, 145, .2);
+      border-radius: 8px;
+      font-size: 10px;
+      text-align: center;
+    }
+
+    .session-snapshot {
+      overflow: hidden;
+      border: 1px solid rgba(74, 101, 145, .14);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .session-snapshot summary {
+      cursor: pointer;
+      padding: 8px 9px;
+      color: #455b75;
+      font-size: 9px;
+      font-weight: 650;
+    }
+
+    .session-snapshot pre {
+      max-height: 180px;
+      margin: 0;
+      overflow: auto;
+      padding: 9px;
+      color: #334b68;
+      background: #f5f8fc;
+      border-top: 1px solid rgba(74, 101, 145, .1);
+      font: 9px/1.55 "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .raw {
+      margin-top: 12px;
+      overflow: hidden;
+    }
+
+    .raw summary {
+      cursor: pointer;
+      padding: 13px 16px;
+      color: var(--muted);
+      font-size: 11px;
+      border-bottom: 1px solid transparent;
+    }
+
+    .raw[open] summary { border-bottom-color: var(--line); }
+    .raw pre {
+      max-height: 360px;
+      margin: 0;
+      overflow: auto;
+      padding: 15px 16px;
+      color: #334b68;
+      background: #f5f8fc;
+      font: 11px/1.62 "Cascadia Code", Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .error { color: var(--red) !important; }
+    .success { color: var(--green) !important; }
+    .warning { color: var(--orange) !important; }
+
+    .business-alert-panel { margin-top: 12px; overflow: hidden; }
+    .business-alerts { padding: 13px 16px 16px; }
+    .business-alert {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 13px;
+      border: 1px solid rgba(21, 155, 108, .18);
+      border-radius: 11px;
+      color: #315e50;
+      background: rgba(21, 155, 108, .06);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+    .business-alert.error-state {
+      color: #843340;
+      border-color: rgba(217, 71, 88, .24);
+      background: rgba(217, 71, 88, .06);
+    }
+    .business-alert.warning-state {
+      color: #81501a;
+      border-color: rgba(233, 139, 37, .24);
+      background: rgba(233, 139, 37, .07);
+    }
+
+    .technical-diagnostics {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, .78);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .technical-diagnostics > summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      cursor: pointer;
+      padding: 16px 18px;
+      color: #304760;
+      font-size: 13px;
+      font-weight: 720;
+      list-style-position: inside;
+    }
+
+    .technical-diagnostics > summary small {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 400;
+    }
+
+    .technical-content {
+      padding: 0 12px 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .friendly-subtitle { margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .technical-name { color: var(--muted); font: 9px/1.4 "Cascadia Code", Consolas, monospace; }
+
+    .llm-panel { margin-top: 12px; overflow: hidden; }
+    .llm-totals { display: flex; gap: 16px; color: var(--muted); font-size: 10px; }
+    .llm-totals strong { color: var(--text); font-size: 12px; }
+    .table-wrap { overflow-x: auto; }
+    .llm-table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    .llm-table th {
+      padding: 11px 16px;
+      color: var(--muted);
+      background: #f7faff;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .04em;
+    }
+    .llm-table td {
+      padding: 13px 16px;
+      color: #3c5069;
+      border-bottom: 1px solid rgba(74, 101, 145, .1);
+      font-size: 11px;
+    }
+    .llm-table tr:last-child td { border-bottom: 0; }
+    .llm-operation { color: #1b3151 !important; font-weight: 720; }
+    .llm-status {
+      display: inline-block;
+      min-width: 42px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      color: var(--green);
+      background: rgba(21, 155, 108, .1);
+      text-align: center;
+      font-size: 9px;
+    }
+    .llm-status.failed { color: var(--red); background: rgba(217, 71, 88, .1); }
+    .llm-empty { color: var(--muted) !important; text-align: center; padding: 24px !important; }
+
+    .observability-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .observability-grid .panel { overflow: hidden; }
+    .obs-body {
+      max-height: 390px;
+      overflow: auto;
+      padding: 12px 15px;
+    }
+    .obs-empty { color: var(--muted); font-size: 11px; padding: 24px 8px; text-align: center; }
+    .obs-row {
+      padding: 9px 10px;
+      border: 1px solid rgba(74, 101, 145, .12);
+      border-radius: 9px;
+      background: #f8fbff;
+      margin-bottom: 7px;
+      color: #3d516a;
+      font: 10px/1.5 "Cascadia Code", Consolas, monospace;
+      word-break: break-word;
+      cursor: pointer;
+    }
+    .obs-row.error-row { border-color: rgba(217, 71, 88, .35); background: rgba(217, 71, 88, .04); }
+    .trace-row { border-left: 3px solid var(--blue); }
+    .trace-row.failed { border-left-color: var(--red); }
+    .trace-meta { color: var(--muted); margin-top: 3px; font-size: 9px; }
+    .filter-row { display: flex; gap: 7px; padding: 9px 15px; border-bottom: 1px solid var(--line); }
+    .filter-row input { min-width: 0; flex: 1; }
+    .health-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 12px 15px 0;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .health-chip { padding: 5px 8px; border-radius: 999px; background: rgba(21, 155, 108, .09); color: var(--green); }
+    .health-chip.degraded { color: var(--red); background: rgba(217, 71, 88, .09); }
+    .candidate-card { cursor: default; }
+    .candidate-actions { display: flex; gap: 7px; margin-top: 8px; }
+    .candidate-actions button {
+      border: 0;
+      border-radius: 7px;
+      padding: 5px 9px;
+      color: #fff;
+      background: var(--green);
+      font-size: 10px;
+    }
+    .candidate-actions button.reject { background: var(--red); }
+    .full-span { grid-column: 1 / -1; }
+
+    @media (max-width: 980px) {
+      .shell { width: min(100% - 24px, 1560px); padding-top: 17px; }
+      .business-summary { grid-template-columns: auto 1fr; }
+      .summary-facts { grid-column: 1 / -1; }
+      .main-grid { grid-template-columns: 1fr; }
+      .observability-grid { grid-template-columns: 1fr; }
+      .full-span { grid-column: auto; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .timeline { height: 470px; }
+    }
+
+    @media (max-width: 580px) {
+      .topbar { align-items: flex-start; }
+      .business-summary { grid-template-columns: 1fr; }
+      .summary-facts { grid-column: auto; grid-template-columns: 1fr; }
+      .command { grid-template-columns: 1fr; }
+      .history-bar { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .metric { min-height: 78px; }
+      .metric-value { font-size: 20px; }
+      .agents { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">SB</div>
+        <div>
+          <h1>V2 协同运行中心</h1>
+          <div class="subtitle">看结论、看协作过程、看动作是否安全完成</div>
+        </div>
+      </div>
+      <div class="live-pill" id="connection">
+        <span class="live-dot"></span>
+        <span id="connectionText">等待启动</span>
+      </div>
+    </header>
+
+    <section class="command">
+      <input id="instruction" value="帮我找公园里走失的白色萨摩耶" maxlength="1000" aria-label="任务指令">
+      <select id="captureMode" aria-label="输入输出采集模式">
+        <option value="metadata">标准记录（推荐）</option>
+        <option value="errors">仅在异常时记录详情</option>
+        <option value="full">完整调试记录（已脱敏）</option>
+      </select>
+      <button id="runButton">开始执行</button>
+    </section>
+
+    <section class="history-bar" aria-label="历史运行选择">
+      <label for="runSelector">查看历史执行</label>
+      <select id="runSelector">
+        <option value="">选择一次历史执行</option>
+      </select>
+      <button id="refreshRuns" type="button">刷新</button>
+      <span class="mode-pill" id="viewMode">实时查看</span>
+    </section>
+
+    <div class="stage-banner">
+      <span class="stage-icon"></span>
+      <span id="stageText">输入任务后，可实时查看两台设备如何竞标、判给和执行。</span>
+    </div>
+
+    <section class="panel business-summary" aria-label="本次运行结论">
+      <div class="outcome-mark" id="outcomeMark">…</div>
+      <div>
+        <div class="outcome-title" id="outcomeTitle">等待执行任务</div>
+        <div class="outcome-narrative" id="outcomeNarrative">尚未产生协同结果。</div>
+      </div>
+      <div class="summary-facts">
+        <div class="summary-fact">
+          <span>任务</span>
+          <strong id="taskGoal">尚未开始</strong>
+        </div>
+        <div class="summary-fact">
+          <span>总耗时</span>
+          <strong id="runDuration">—</strong>
+        </div>
+        <div class="summary-fact">
+          <span>异常</span>
+          <strong id="businessErrorSummary">尚未检查</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="metrics">
+      <article class="metric">
+        <div class="metric-label">运行状态</div>
+        <div class="metric-value" id="taskStatus">等待</div>
+        <div class="metric-note" id="modelName">尚未启动</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">协同进度</div>
+        <div class="metric-value"><span id="eventCount">0</span><span style="color:var(--muted);font-size:14px"> / 9</span></div>
+        <div class="metric-note">白板已确认的关键事实</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">执行设备</div>
+        <div class="metric-value" id="winner">—</div>
+        <div class="metric-note">竞标并校验后的正式归属</div>
+      </article>
+      <article class="metric">
+        <div class="metric-label">白板确认位置</div>
+        <div class="metric-value" id="watermark">0</div>
+        <div class="metric-note">仅代表已确认事实的顺序</div>
+      </article>
+    </section>
+
+    <section class="panel flow-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">协同执行进度</div>
+          <div class="panel-kicker">九个关键事实依次确认，结束后清理临时状态</div>
+        </div>
+        <div class="panel-kicker">完成后形成可追溯记录</div>
+      </div>
+      <div class="flow-scroll"><div class="flow" id="flow"></div></div>
+    </section>
+
+    <div class="main-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">协同过程（系统已确认事实）</div>
+            <div class="panel-kicker">用中文说明每一步发生了什么；点击可查看技术原文</div>
+          </div>
+          <div class="panel-kicker" id="runId">记录 —</div>
+        </div>
+        <div class="timeline" id="timeline">
+          <div class="empty" id="emptyState">
+            <div>尚无协同记录<br>点击“开始执行”观察完整过程</div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">两台设备的竞标情况</div>
+            <div class="panel-kicker">各自独立评估，不共享私有记忆</div>
+          </div>
+          <div class="side-body agents">
+            <article class="agent" id="agent-dog-a">
+              <div class="agent-head"><span class="agent-name">dog-a</span><span class="badge" id="badge-dog-a">等待</span></div>
+              <dl>
+                <div><dt>电量余量</dt><dd id="battery-dog-a">—</dd></div>
+                <div><dt>可靠性</dt><dd id="reliability-dog-a">—</dd></div>
+                <div><dt>模型置信</dt><dd id="confidence-dog-a">—</dd></div>
+              </dl>
+              <details class="session-section">
+                <summary>任务内临时状态 · <span id="sessionState-dog-a">未创建</span></summary>
+                <div class="session-history" id="sessionHistory-dog-a">
+                  <div class="session-empty">尚无临时状态记录</div>
+                </div>
+              </details>
+            </article>
+            <article class="agent" id="agent-dog-b">
+              <div class="agent-head"><span class="agent-name">dog-b</span><span class="badge" id="badge-dog-b">等待</span></div>
+              <dl>
+                <div><dt>电量余量</dt><dd id="battery-dog-b">—</dd></div>
+                <div><dt>可靠性</dt><dd id="reliability-dog-b">—</dd></div>
+                <div><dt>模型置信</dt><dd id="confidence-dog-b">—</dd></div>
+              </dl>
+              <details class="session-section">
+                <summary>任务内临时状态 · <span id="sessionState-dog-b">未创建</span></summary>
+                <div class="session-history" id="sessionHistory-dog-b">
+                  <div class="session-empty">尚无临时状态记录</div>
+                </div>
+              </details>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">最终由谁执行</div>
+            <div class="panel-kicker">综合两份竞标，再经过规则校验</div>
+          </div>
+          <div class="side-body">
+            <div class="reason" id="groupReason">等待两台设备提交竞标结果。</div>
+            <div class="fact-grid">
+              <div class="fact"><span class="fact-key">正式中标</span><span class="fact-value" id="assignedDevice">—</span></div>
+              <div class="fact"><span class="fact-key">规划建议是否通过校验</span><span class="fact-value" id="candidateMatch">—</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">动作执行与安全核验</div>
+            <div class="panel-kicker">执行前后都经过安全检查</div>
+          </div>
+          <div class="side-body">
+            <div class="fact-grid" style="margin-top:0">
+              <div class="fact"><span class="fact-key">执行设备</span><span class="fact-value" id="actionDevice">—</span></div>
+              <div class="fact"><span class="fact-key">执行动作</span><span class="fact-value" id="actionVerb">—</span></div>
+              <div class="fact"><span class="fact-key">安全检查</span><span class="fact-value" id="safetyState">—</span></div>
+              <div class="fact"><span class="fact-key">执行结果</span><span class="fact-value" id="receiptState">—</span></div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="panel business-alert-panel" aria-label="运行异常摘要">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">运行健康与异常</div>
+          <div class="panel-kicker">这里只汇总需要业务人员关注的情况</div>
+        </div>
+        <div class="panel-kicker" id="businessAlertCount">尚未运行</div>
+      </div>
+      <div class="business-alerts" id="businessAlerts">
+        <div class="business-alert warning-state">运行尚未开始，暂无安全或异常结论。</div>
+      </div>
+    </section>
+
+    <details class="technical-diagnostics" id="technicalDiagnostics">
+      <summary>
+        <span>技术诊断</span>
+        <small>按需展开：模型调用、Trace、模块输入输出、日志、指标与记忆候选</small>
+      </summary>
+      <div class="technical-content">
+    <section class="panel llm-panel">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">模型调用明细</div>
+          <div class="panel-kicker">供研发诊断：输入输出规模、耗时与调用状态</div>
+        </div>
+        <div class="llm-totals">
+          <span>调用 <strong id="llmCallCount">0</strong></span>
+          <span>Token <strong id="llmTotalTokens">0</strong></span>
+          <span>耗时 <strong id="llmTotalDuration">0 ms</strong></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="llm-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>调用阶段</th>
+              <th>模型</th>
+              <th>输入 Token</th>
+              <th>输出 Token</th>
+              <th>总 Token</th>
+              <th>耗时</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="llmRows">
+            <tr id="llmEmptyRow"><td class="llm-empty" colspan="8">启动任务后显示真实模型调用指标</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="observability-grid" aria-label="全流程可观测视图">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">调用链</div>
+            <div class="panel-kicker">中文阶段名为主；点击记录查看原始 Span 字段</div>
+          </div>
+          <div class="panel-kicker" id="traceSummary">0 spans</div>
+        </div>
+        <div class="obs-body" id="traceTree"><div class="obs-empty">选择运行后加载 Trace</div></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">模块输入与输出</div>
+            <div class="panel-kicker">仅展示脱敏摘要；点击后按采集策略读取详情</div>
+          </div>
+        </div>
+        <div class="obs-body" id="payloadList"><div class="obs-empty">暂无模块 I/O 摘要</div></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">日志与异常</div>
+            <div class="panel-kicker">正常运行状态、降级和异常堆栈</div>
+          </div>
+          <div class="panel-kicker" id="errorSummary">0 条异常</div>
+        </div>
+        <div class="filter-row">
+          <select id="logLevel" aria-label="日志级别">
+            <option value="">全部级别</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <input id="logSearch" placeholder="筛选模块、阶段或消息">
+        </div>
+        <div class="obs-body" id="logRows"><div class="obs-empty">暂无日志</div></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">性能与采集健康</div>
+            <div class="panel-kicker">中文指标说明为主；点击查看原始技术字段</div>
+          </div>
+        </div>
+        <div class="health-strip" id="healthStrip"></div>
+        <div class="obs-body" id="metricRows"><div class="obs-empty">暂无指标</div></div>
+      </article>
+
+      <article class="panel full-span">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">长期记忆候选审核</div>
+            <div class="panel-kicker">共享事实和技能建议经人工批准后才会被后续任务采用</div>
+          </div>
+          <button id="refreshMemory" type="button">刷新候选</button>
+        </div>
+        <div class="obs-body" id="memoryCandidates"><div class="obs-empty">暂无待审核候选</div></div>
+      </article>
+    </section>
+
+    <details class="panel raw" id="rawPanel">
+      <summary>原始技术数据（JSON）</summary>
+      <pre id="rawJson">等待数据</pre>
+    </details>
+      </div>
+    </details>
+  </div>
+
+  <script>
+    const FLOW = [
+      ["task_posted", "任务发布", 1],
+      ["bid_round_opened", "开启竞标", 1],
+      ["bid", "设备报价", 2],
+      ["task_assigned", "确定执行者", 1],
+      ["action_intent", "准备动作", 1],
+      ["receipt", "动作回执", 1],
+      ["assignment_completed", "执行完成", 1],
+      ["task_done", "任务完成", 1],
+      ["memory_cleaned", "清理临时状态", 1]
+    ];
+
+    const TYPE_LABELS = {
+      task_posted: "任务已发布",
+      bid_round_opened: "竞标已开启",
+      bid: "设备已报价",
+      task_assigned: "执行者已确定",
+      action_intent: "动作已准备",
+      safety_intercept: "安全系统已拦截动作",
+      receipt: "设备已回执",
+      assignment_completed: "本次执行已完成",
+      task_replan: "任务正在重新规划",
+      estop: "已触发紧急停止",
+      task_done: "任务已完成",
+      task_failed: "任务执行失败"
+    };
+
+    const SOURCE_LABELS = {
+      ingress: "任务入口",
+      coordinator: "协同调度器",
+      "dog-a": "设备 dog-a",
+      "dog-b": "设备 dog-b",
+      blackboard: "协同白板"
+    };
+
+    const STATUS_LABELS = {
+      idle: "等待",
+      starting: "启动中",
+      started: "已启动",
+      posted: "任务已发布",
+      bidding: "设备竞标中",
+      assigned: "已确定执行者",
+      running: "执行中",
+      ok: "成功完成",
+      done: "成功完成",
+      success: "成功完成",
+      completed: "成功完成",
+      incomplete: "尚未完成",
+      failed: "执行失败",
+      error: "运行异常",
+      degraded: "降级运行"
+    };
+
+    const SPAN_LABELS = {
+      "swarm_brain.chain1.run": "V2 协同任务全程",
+      "ingress.task.generate": "生成结构化任务",
+      "gen_ai.intent.interpret": "理解任务意图",
+      "blackboard.event.append": "向协同白板确认事实",
+      "coordinator.bid_round.open": "调度器开启竞标",
+      "coordinator.event.consume": "调度器接收协同事实",
+      "agent.event.consume": "设备接收协同事实",
+      "agent.process_bid_round": "设备评估并报价",
+      "skill.retrieve": "查找可用技能",
+      "memory.retrieve": "检索相关记忆",
+      "coordinator.group_plan": "汇总报价并制定方案",
+      "coordinator.group_policy.invoke": "生成群体规划建议",
+      "gen_ai.group_plan": "模型辅助群体规划",
+      "coordinator.plan.validate": "校验规划方案",
+      "agent.assignment.consume": "设备接收任务分配",
+      "action.intent.build": "生成设备动作",
+      "safety.pre_check": "执行前安全检查",
+      "tool.gateway.dispatch": "把动作派发给设备",
+      "tool.invoke": "调用设备能力",
+      "adapter.execute": "设备适配器执行",
+      "safety.post_check": "执行后安全核验",
+      "coordinator.complete": "调度器确认任务完成",
+      "memory.consolidate": "提炼长期记忆"
+    };
+
+    const METRIC_LABELS = {
+      "swarm_brain.run.total": "运行次数",
+      "swarm_brain.run.completed": "已完成运行数",
+      "swarm_brain.run.duration": "整次运行耗时",
+      "swarm_brain.run.duration_ms": "整次运行耗时",
+      "blackboard.append.count": "白板事实写入次数",
+      "blackboard.append.duration_ms": "白板事实写入耗时",
+      "blackboard.event.count": "白板已确认事实数",
+      "coordinator.bid_round.open.duration_ms": "开启竞标耗时",
+      "coordinator.group_plan.duration_ms": "汇总并判给耗时",
+      "agent.bid.count": "设备报价次数",
+      "agent.bid.duration_ms": "设备报价耗时",
+      "agent.assignment.duration_ms": "设备执行分配耗时",
+      "memory.retrieve.duration_ms": "记忆检索耗时",
+      "memory.retrieve.hits": "记忆命中数量",
+      "memory.promotion.count": "记忆晋升候选数",
+      "memory.consolidate.duration_ms": "记忆提炼耗时",
+      "gen_ai.call.duration_ms": "模型调用耗时",
+      "gen_ai.call.count": "模型调用次数",
+      "tool.invoke.duration_ms": "设备能力调用耗时",
+      "tool.invoke.count": "设备能力调用次数",
+      "tool.duration_ms": "设备能力调用耗时",
+      "tool.call.count": "设备能力调用次数",
+      "safety.intercept.count": "安全拦截次数",
+      "observability.queue.depth": "观测写入队列深度",
+      "observability.records.dropped": "观测记录丢弃数",
+      "observability.sqlite.write_errors": "观测数据库写入错误数"
+    };
+
+    const ui = Object.fromEntries([
+      "instruction", "captureMode", "runButton", "connection", "connectionText", "stageText",
+      "watermark", "eventCount", "taskStatus", "modelName", "winner", "flow",
+      "timeline", "emptyState", "runId", "groupReason", "assignedDevice",
+      "candidateMatch", "actionDevice", "actionVerb", "safetyState",
+      "receiptState", "rawJson", "rawPanel", "llmRows", "llmCallCount",
+      "llmTotalTokens", "llmTotalDuration", "runSelector", "refreshRuns",
+      "viewMode", "traceTree", "traceSummary", "payloadList", "logRows",
+      "logLevel", "logSearch", "errorSummary", "metricRows", "healthStrip",
+      "memoryCandidates", "refreshMemory", "outcomeMark", "outcomeTitle",
+      "outcomeNarrative", "taskGoal", "runDuration", "businessErrorSummary",
+      "businessAlertCount", "businessAlerts", "technicalDiagnostics"
+    ].map(id => [id, document.getElementById(id)]));
+
+    let source = null;
+    let counts = {};
+    let receivedEvents = [];
+    let llmCalls = [];
+    let currentRunId = null;
+    let lastSequence = 0;
+    let cachedLogs = [];
+    let cachedErrors = [];
+    let knownRuns = [];
+
+    const OPERATION_LABELS = {
+      intent_interpretation: "意图识别",
+      "local_proposal:dog-a": "dog-a 协作判断",
+      "local_proposal:dog-b": "dog-b 协作判断",
+      group_planning: "群体集中判给",
+      healthcheck: "连接检查",
+      "swarm_brain.chain1.run": "V2 协同任务",
+      "run.started": "运行开始",
+      "run.completed": "运行结束",
+      "run.failed": "运行失败",
+      "chain1.run.started": "运行开始",
+      "chain1.run.completed": "运行结束",
+      "chain1.run.failed": "运行失败",
+      "observability.degraded": "观测服务降级",
+      "memory.consolidate": "长期记忆提炼",
+      "observability.flush": "观测数据落盘"
+    };
+
+    const ACTION_LABELS = {
+      move_to: "移动到指定区域",
+      search: "搜索目标",
+      inspect: "检查目标",
+      stop: "停止动作",
+      return_home: "返回驻点"
+    };
+
+    const SESSION_PHASE_LABELS = {
+      after_bid: "竞标后",
+      after_assignment_execution: "分配 / 执行后",
+      before_terminal_cleanup: "终态清理前",
+      after_task_done_cleanup: "任务完成并清理后"
+    };
+
+    const SESSION_STATE_LABELS = {
+      bidding: "竞标中",
+      assigned: "已分配",
+      executing: "执行中",
+      completed: "已完成",
+      done: "已完成",
+      failed: "已失败",
+      stopped: "已停止",
+      cleared: "已清理"
+    };
+
+    function statusLabel(value) {
+      const normalized = String(value ?? "").toLowerCase();
+      return STATUS_LABELS[normalized] || (value == null || value === "" ? "状态未知" : "内部状态");
+    }
+
+    function sourceLabel(value) {
+      return SOURCE_LABELS[value] || (value ? "系统模块" : "来源未记录");
+    }
+
+    function boolValue(value) {
+      if (value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true") return true;
+      if (value === false || value === 0 || value === "0" || String(value).toLowerCase() === "false") return false;
+      return undefined;
+    }
+
+    function firstDefined(...values) {
+      return values.find(value => value !== undefined && value !== null && value !== "");
+    }
+
+    function friendlyAction(verb, target) {
+      if (!verb) return "未采集";
+      const label = ACTION_LABELS[verb] || "设备动作";
+      return target ? `${label}（目标：${target}）` : label;
+    }
+
+    function setBusinessAlerts(errors, status) {
+      const rows = Array.isArray(errors) ? errors : [];
+      ui.businessAlerts.replaceChildren();
+      const alert = document.createElement("div");
+      const normalizedStatus = String(status || "").toLowerCase();
+      if (rows.length) {
+        alert.className = "business-alert error-state";
+        const first = rows[0] || {};
+        alert.textContent = `发现 ${rows.length} 条异常。首条：${first.message || first.error_message || first.error_type || "详情请展开技术诊断查看"}`;
+        ui.businessAlertCount.textContent = `${rows.length} 条异常`;
+        ui.businessErrorSummary.textContent = `${rows.length} 条`;
+        ui.businessErrorSummary.className = "error";
+      } else if (["failed", "error"].includes(normalizedStatus)) {
+        alert.className = "business-alert error-state";
+        alert.textContent = "本次运行未成功完成；异常详情可能仍在落盘，请展开技术诊断查看。";
+        ui.businessAlertCount.textContent = "运行失败";
+        ui.businessErrorSummary.textContent = "运行失败";
+        ui.businessErrorSummary.className = "error";
+      } else if (["ok", "done", "success", "completed"].includes(normalizedStatus)) {
+        alert.className = "business-alert";
+        alert.textContent = "本次运行成功完成，未发现异常；动作安全结果以“动作执行与安全核验”卡片为准。";
+        ui.businessAlertCount.textContent = "未发现异常";
+        ui.businessErrorSummary.textContent = "0 条";
+        ui.businessErrorSummary.className = "success";
+      } else {
+        alert.className = "business-alert warning-state";
+        alert.textContent = "运行仍在进行，异常结论将在任务结束后更新。";
+        ui.businessAlertCount.textContent = "检查中";
+        ui.businessErrorSummary.textContent = "检查中";
+        ui.businessErrorSummary.className = "warning";
+      }
+      ui.businessAlerts.appendChild(alert);
+    }
+
+    function setOutcome(status, message) {
+      const normalized = String(status || "").toLowerCase();
+      ui.outcomeMark.className = "outcome-mark";
+      if (["ok", "done", "success", "completed"].includes(normalized)) {
+        ui.outcomeMark.textContent = "✓";
+        ui.outcomeMark.classList.add("success");
+        ui.outcomeTitle.textContent = "任务已成功完成";
+        ui.outcomeNarrative.textContent = message || "协同、设备动作和任务收敛均已完成。";
+      } else if (["failed", "error"].includes(normalized)) {
+        ui.outcomeMark.textContent = "!";
+        ui.outcomeMark.classList.add("error");
+        ui.outcomeTitle.textContent = "任务执行失败";
+        ui.outcomeNarrative.textContent = message || "请查看异常摘要，并在技术诊断中定位失败阶段。";
+      } else {
+        ui.outcomeMark.textContent = "…";
+        ui.outcomeTitle.textContent = normalized ? statusLabel(normalized) : "等待执行任务";
+        ui.outcomeNarrative.textContent = message || "尚未产生最终协同结果。";
+      }
+    }
+
+    function renderFlow() {
+      ui.flow.replaceChildren();
+      FLOW.forEach(([type, label, expected], index) => {
+        const node = document.createElement("div");
+        node.className = "flow-step";
+        node.dataset.type = type;
+        const num = document.createElement("div");
+        num.className = "step-num";
+        num.textContent = String(index + 1).padStart(2, "0");
+        const name = document.createElement("div");
+        name.className = "step-name";
+        name.textContent = label;
+        const count = document.createElement("div");
+        count.className = "step-count";
+        count.textContent = `0 / ${expected}`;
+        node.append(num, name, count);
+        ui.flow.appendChild(node);
+      });
+    }
+
+    function resetUI() {
+      counts = {};
+      receivedEvents = [];
+      llmCalls = [];
+      cachedLogs = [];
+      cachedErrors = [];
+      lastSequence = 0;
+      renderFlow();
+      ui.timeline.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.id = "emptyState";
+      empty.textContent = "运行已启动，等待第一条协同事实…";
+      ui.timeline.appendChild(empty);
+      ui.watermark.textContent = "0";
+      ui.eventCount.textContent = "0";
+      ui.taskStatus.textContent = "启动中";
+      ui.taskStatus.className = "metric-value";
+      ui.winner.textContent = "—";
+      ui.modelName.textContent = "正在建立 V2 协同链路";
+      ui.groupReason.textContent = "等待两台设备提交竞标结果。";
+      ui.assignedDevice.textContent = "—";
+      ui.candidateMatch.textContent = "—";
+      ui.actionDevice.textContent = "—";
+      ui.actionVerb.textContent = "—";
+      ui.safetyState.textContent = "—";
+      ui.receiptState.textContent = "—";
+      ui.receiptState.className = "fact-value";
+      ui.safetyState.className = "fact-value";
+      ui.taskGoal.textContent = ui.instruction.value.trim() || "任务内容未记录";
+      ui.runDuration.textContent = "计时中";
+      setOutcome("starting", "正在建立协同上下文并发布任务。");
+      setBusinessAlerts([], "running");
+      ui.rawJson.textContent = "等待数据";
+      ui.llmRows.replaceChildren();
+      const llmEmpty = document.createElement("tr");
+      const llmCell = document.createElement("td");
+      llmCell.className = "llm-empty";
+      llmCell.colSpan = 8;
+      llmCell.textContent = "等待真实模型调用…";
+      llmEmpty.appendChild(llmCell);
+      ui.llmRows.appendChild(llmEmpty);
+      ui.llmCallCount.textContent = "0";
+      ui.llmTotalTokens.textContent = "0";
+      ui.llmTotalDuration.textContent = "0 ms";
+      setEmpty(ui.traceTree, "运行中，等待 Trace 落盘…");
+      setEmpty(ui.payloadList, "运行中，等待模块 I/O 摘要…");
+      setEmpty(ui.logRows, "运行中，等待结构化日志…");
+      setEmpty(ui.metricRows, "运行中，等待指标聚合…");
+      ui.traceSummary.textContent = "尚无调用记录";
+      ui.errorSummary.textContent = "0 条异常";
+      ["dog-a", "dog-b"].forEach(id => {
+        document.getElementById(`agent-${id}`).classList.remove("winner");
+        const badge = document.getElementById(`badge-${id}`);
+        badge.textContent = "等待";
+        badge.className = "badge";
+        document.getElementById(`battery-${id}`).textContent = "—";
+        document.getElementById(`reliability-${id}`).textContent = "—";
+        document.getElementById(`confidence-${id}`).textContent = "—";
+        document.getElementById(`sessionState-${id}`).textContent = "未创建";
+        const sessionHistory = document.getElementById(`sessionHistory-${id}`);
+        sessionHistory.replaceChildren();
+        const sessionEmpty = document.createElement("div");
+        sessionEmpty.className = "session-empty";
+        sessionEmpty.textContent = "尚无临时状态记录";
+        sessionHistory.appendChild(sessionEmpty);
+      });
+    }
+
+    function updateFlow(type) {
+      counts[type] = (counts[type] || 0) + 1;
+      const nodes = [...ui.flow.querySelectorAll(".flow-step")];
+      nodes.forEach(node => node.classList.remove("active"));
+      const node = ui.flow.querySelector(`[data-type="${type}"]`);
+      if (!node) return;
+      const expected = FLOW.find(item => item[0] === type)[2];
+      node.querySelector(".step-count").textContent = `${Math.min(counts[type], expected)} / ${expected}`;
+      node.classList.add(counts[type] >= expected ? "done" : "active");
+      const index = nodes.indexOf(node);
+      if (counts[type] >= expected && nodes[index + 1]) nodes[index + 1].classList.add("active");
+    }
+
+    function eventSummary(event) {
+      const c = event.content || {};
+      switch (event.type) {
+        case "task_posted":
+          return c.goal ? `调度器收到任务：“${c.goal}”` : "任务内容已结构化并提交给协同系统。";
+        case "bid_round_opened":
+          return `调度器邀请设备竞标${Array.isArray(c.slots) && c.slots.length ? `，需要承担：${c.slots.join("、")}` : ""}。`;
+        case "bid": {
+          const offer = (c.offers || [])[0] || {};
+          const m = offer.metrics || {};
+          const decision = offer.decision === "accept" ? "愿意执行" : offer.decision === "reject" ? "拒绝执行" : "提交了评估";
+          const facts = [];
+          if (typeof m.battery_margin === "number") facts.push(`电量余量 ${formatPercent(m.battery_margin)}`);
+          if (typeof m.reliability === "number") facts.push(`可靠性 ${formatPercent(m.reliability)}`);
+          return `${c.device_id || "设备"}${decision}${facts.length ? `；${facts.join("，")}` : ""}。`;
+        }
+        case "task_assigned": {
+          const row = (c.assignments || [])[0] || {};
+          return `${row.device_id || c.device_id || "一台设备"}通过综合评估，获得本次任务的正式执行权。`;
+        }
+        case "action_intent":
+          return `${c.device_id || "执行设备"}准备${friendlyAction(c.verb, firstDefined(c.target, c.params?.target))}，随后进入安全检查。`;
+        case "safety_intercept":
+          return `安全系统在${c.safety_phase === "post" || c.check_phase === "post" ? "执行后核验" : "执行前检查"}阶段拦截了${c.device_id || "执行设备"}的动作${c.safety_reason || c.reason ? `：${c.safety_reason || c.reason}` : "，原因请在技术诊断中查看"}。`;
+        case "receipt": {
+          const success = boolValue(c.success);
+          const allowed = boolValue(c.post_check_allowed);
+          if (success === true) {
+            return `${c.device_id || "执行设备"}确认动作成功${allowed === true ? "，执行后安全核验通过" : allowed === false ? "，但执行后安全核验未通过" : "；安全核验结果未采集"}。`;
+          }
+          if (success === false) return `${c.device_id || "执行设备"}报告动作失败${c.failure_reason ? `：${c.failure_reason}` : "，原因未记录"}。`;
+          return `${c.device_id || "执行设备"}已返回回执，但执行结果字段未采集。`;
+        }
+        case "assignment_completed": return `${c.device_id || "执行设备"}的任务分工已确认完成。`;
+        case "task_replan": return "当前方案无法继续，调度器正在重新评估执行方案。";
+        case "estop": return "安全系统触发紧急停止，相关设备动作已被中止。";
+        case "task_done": return "全部必要步骤已经收敛，本次任务正式完成。";
+        case "task_failed": return "任务未能完成；失败环节和原始原因可在技术诊断中查看。";
+        default: return "协同白板已确认一条业务事实。";
+      }
+    }
+
+    function addEvent(event) {
+      const empty = ui.timeline.querySelector(".empty");
+      if (empty) empty.remove();
+      receivedEvents.push(event);
+      ui.watermark.textContent = String(event.version || receivedEvents.length);
+      ui.eventCount.textContent = String(receivedEvents.length);
+      updateFlow(event.type);
+
+      const row = document.createElement("article");
+      row.className = "event-row";
+      const version = document.createElement("div");
+      version.className = "event-version";
+      version.textContent = `第${event.version || receivedEvents.length}条`;
+      const dot = document.createElement("div");
+      dot.className = "event-dot";
+      const card = document.createElement("div");
+      card.className = "event-card";
+      const top = document.createElement("div");
+      top.className = "event-top";
+      const type = document.createElement("span");
+      type.className = "event-type";
+      type.textContent = TYPE_LABELS[event.type] || "协同事实";
+      const sourceName = document.createElement("span");
+      sourceName.className = "event-source";
+      sourceName.textContent = sourceLabel(event.source);
+      const summary = document.createElement("div");
+      summary.className = "event-summary";
+      summary.textContent = eventSummary(event);
+      top.append(type, sourceName);
+      card.append(top, summary);
+      row.append(version, dot, card);
+      row.addEventListener("click", () => showRaw(event));
+      ui.timeline.appendChild(row);
+      ui.timeline.scrollTop = ui.timeline.scrollHeight;
+
+      applyEventToCards(event);
+    }
+
+    function applyEventToCards(event) {
+      const c = event.content || {};
+      if (event.type === "task_posted") {
+        ui.taskStatus.textContent = "任务已发布";
+        if (c.goal) ui.taskGoal.textContent = c.goal;
+        setOutcome("posted", "任务已发布，正在等待设备竞标。");
+      } else if (event.type === "bid_round_opened") {
+        ui.taskStatus.textContent = "设备竞标中";
+        setOutcome("bidding", "两台设备正在独立评估自身能力与风险。");
+      } else if (event.type === "bid") {
+        const id = c.device_id;
+        if (!["dog-a", "dog-b"].includes(id)) return;
+        const offer = (c.offers || [])[0] || {};
+        const metrics = offer.metrics || {};
+        const proposal = c.proposal || {};
+        const badge = document.getElementById(`badge-${id}`);
+        badge.textContent = offer.decision === "accept" ? "愿意执行" : offer.decision === "reject" ? "拒绝" : "已评估";
+        badge.className = `badge ${offer.decision === "accept" ? "accept" : ""}`;
+        document.getElementById(`battery-${id}`).textContent = formatPercent(metrics.battery_margin);
+        document.getElementById(`reliability-${id}`).textContent = formatPercent(metrics.reliability);
+        document.getElementById(`confidence-${id}`).textContent = formatPercent(proposal.confidence);
+      } else if (event.type === "task_assigned") {
+        const assignment = (c.assignments || [])[0] || {};
+        const id = assignment.device_id || "—";
+        ui.winner.textContent = id;
+        ui.assignedDevice.textContent = id;
+        ui.taskStatus.textContent = "已确定执行者";
+        setOutcome("assigned", `${id} 已通过综合评估，准备执行任务。`);
+        if (document.getElementById(`agent-${id}`)) document.getElementById(`agent-${id}`).classList.add("winner");
+      } else if (event.type === "action_intent") {
+        ui.taskStatus.textContent = "执行中";
+        ui.actionDevice.textContent = c.device_id || "未采集";
+        if (c.device_id && ui.winner.textContent === "—") {
+          ui.winner.textContent = c.device_id;
+          ui.assignedDevice.textContent = c.device_id;
+        }
+        ui.actionVerb.textContent = friendlyAction(c.verb, firstDefined(c.target, c.params?.target));
+        ui.safetyState.textContent = "等待执行后安全核验";
+        ui.safetyState.className = "fact-value";
+        setOutcome("running", `${c.device_id || "执行设备"}正在执行已批准动作。`);
+      } else if (event.type === "safety_intercept") {
+        if (c.device_id) ui.actionDevice.textContent = c.device_id;
+        const reason = c.safety_reason || c.reason || "安全策略未通过";
+        ui.taskStatus.textContent = "安全拦截";
+        ui.taskStatus.className = "metric-value error";
+        ui.safetyState.textContent = `已拦截：${reason}`;
+        ui.safetyState.className = "fact-value error";
+        ui.receiptState.textContent = "动作未完成";
+        ui.receiptState.className = "fact-value error";
+        setOutcome("failed", `安全系统已阻止本次动作：${reason}`);
+      } else if (event.type === "receipt") {
+        const success = boolValue(c.success);
+        const allowed = boolValue(c.post_check_allowed);
+        if (c.device_id) ui.actionDevice.textContent = c.device_id;
+        if (success === true) {
+          ui.receiptState.textContent = c.outcome_certainty === "confirmed" ? "成功，设备已确认" : "成功";
+          ui.receiptState.className = "fact-value success";
+        } else if (success === false) {
+          ui.receiptState.textContent = c.failure_reason ? `失败：${c.failure_reason}` : "执行失败";
+          ui.receiptState.className = "fact-value error";
+        } else {
+          ui.receiptState.textContent = "结果未采集";
+          ui.receiptState.className = "fact-value warning";
+        }
+        if (allowed === true) {
+          ui.safetyState.textContent = "已通过安全核验";
+          ui.safetyState.className = "fact-value success";
+        } else if (allowed === false) {
+          ui.safetyState.textContent = "执行后安全核验未通过";
+          ui.safetyState.className = "fact-value error";
+        } else {
+          ui.safetyState.textContent = "安全结果未采集";
+          ui.safetyState.className = "fact-value warning";
+        }
+      } else if (event.type === "estop") {
+        ui.taskStatus.textContent = "紧急停止";
+        ui.taskStatus.className = "metric-value error";
+        ui.safetyState.textContent = "已触发紧急停止";
+        ui.safetyState.className = "fact-value error";
+        ui.receiptState.textContent = "动作已中止";
+        ui.receiptState.className = "fact-value error";
+        setOutcome("failed", "安全系统已触发紧急停止。");
+      } else if (event.type === "task_failed") {
+        const reason = c.reason || c.reason_code || "具体原因未记录";
+        ui.taskStatus.textContent = "执行失败";
+        ui.taskStatus.className = "metric-value error";
+        setOutcome("failed", `任务未能完成：${reason}`);
+        setBusinessAlerts([{message: `任务未能完成：${reason}`}], "failed");
+      } else if (event.type === "task_done") {
+        ui.taskStatus.textContent = "成功完成";
+        ui.taskStatus.className = "metric-value success";
+        setOutcome("done");
+        setBusinessAlerts(cachedErrors, "done");
+        updateFlow("memory_cleaned");
+      }
+    }
+
+    function applyResult(result) {
+      ui.rawJson.textContent = JSON.stringify(result, null, 2);
+      const runtime = result.runtime || {};
+      const task = result.task || {};
+      ui.modelName.textContent = "V2 协同链路 · 全程已留痕";
+      if (task.goal) ui.taskGoal.textContent = task.goal;
+      ui.winner.textContent = task.winner || "—";
+      ui.assignedDevice.textContent = task.winner || "—";
+      const group = result.coordination || {};
+      const candidate = group.group_candidate || {};
+      ui.groupReason.textContent = candidate.rationale_summary || "系统根据两台设备的能力和约束完成了确定性匹配。";
+      const candidateMatch = boolValue(group.group_candidate_matches_committed);
+      ui.candidateMatch.textContent = candidateMatch === true ? "是，建议通过校验" : candidateMatch === false ? "否，已采用规则兜底" : "未采集";
+      ui.candidateMatch.className = `fact-value ${candidateMatch === true ? "success" : candidateMatch === false ? "warning" : ""}`;
+      const execution = result.execution || {};
+      const intent = execution.intent || {};
+      const receipt = execution.receipt || {};
+      const interceptValues = Array.isArray(execution.safety_intercepts)
+        ? execution.safety_intercepts
+        : Object.values(execution.safety_intercepts || {}).flatMap(value => Array.isArray(value) ? value : [value]);
+      if (Object.keys(intent).length) {
+        applyEventToCards({type: "action_intent", content: intent});
+      }
+      interceptValues.filter(Boolean).forEach(intercept => {
+        applyEventToCards({type: "safety_intercept", content: intercept.content || intercept});
+      });
+      if (Object.keys(receipt).length) {
+        applyEventToCards({type: "receipt", content: receipt});
+      }
+      const receiptFailed = Object.keys(receipt).length && (
+        boolValue(receipt.success) === false || boolValue(receipt.post_check_allowed) === false
+      );
+      const finalStatus = interceptValues.length || receiptFailed
+        ? "failed"
+        : task.status || result.status || "completed";
+      const finalStatusValue = String(finalStatus).toLowerCase();
+      ui.taskStatus.textContent = statusLabel(finalStatus);
+      ui.taskStatus.className = `metric-value ${["done", "ok", "success", "completed"].includes(finalStatusValue) ? "success" : ["failed", "error"].includes(finalStatusValue) ? "error" : ""}`;
+      setOutcome(finalStatus);
+      setBusinessAlerts(cachedErrors, finalStatus);
+      const completion = result.completion || {};
+      const sessionStates = Object.values(completion.agent_task_sessions_cleared || {});
+      const cleared = sessionStates.length > 0 && sessionStates.every(Boolean);
+      if (cleared) {
+        updateFlow("memory_cleaned");
+        const node = ui.flow.querySelector('[data-type="memory_cleaned"]');
+        if (node) node.classList.add("done");
+      }
+    }
+
+    function addLLMCall(call) {
+      if (llmCalls.length === 0) ui.llmRows.replaceChildren();
+      llmCalls.push(call);
+      const row = document.createElement("tr");
+      const values = [
+        String(llmCalls.length),
+        OPERATION_LABELS[call.operation] || call.operation || "模型调用",
+        call.model || "—",
+        tokenText(call.input_tokens),
+        tokenText(call.output_tokens),
+        tokenText(call.total_tokens),
+        durationText(call.duration_ms)
+      ];
+      values.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if (index === 1) cell.className = "llm-operation";
+        row.appendChild(cell);
+      });
+      const statusCell = document.createElement("td");
+      const status = document.createElement("span");
+      status.className = `llm-status ${call.status === "ok" ? "" : "failed"}`;
+      status.textContent = call.status === "ok" ? "成功" : "失败";
+      statusCell.appendChild(status);
+      row.appendChild(statusCell);
+      row.addEventListener("click", () => showRaw(call));
+      ui.llmRows.appendChild(row);
+
+      const knownTokenTotals = llmCalls
+        .map(item => item.total_tokens)
+        .filter(value => typeof value === "number");
+      const totalTokens = knownTokenTotals.reduce((sum, value) => sum + value, 0);
+      const totalDuration = llmCalls.reduce(
+        (sum, item) => sum + (typeof item.duration_ms === "number" ? item.duration_ms : 0),
+        0
+      );
+      ui.llmCallCount.textContent = String(llmCalls.length);
+      ui.llmTotalTokens.textContent = knownTokenTotals.length ? String(totalTokens) : "未采集";
+      ui.llmTotalDuration.textContent = durationText(totalDuration);
+    }
+
+    function renderHistoricalLlmCalls(rows) {
+      llmCalls = [];
+      ui.llmRows.replaceChildren();
+      ui.llmCallCount.textContent = "0";
+      ui.llmTotalTokens.textContent = "0";
+      ui.llmTotalDuration.textContent = "0 ms";
+      const calls = rows
+        .filter(row => row.category === "llm" && row.name === "gen_ai.call")
+        .map(row => {
+          const attributes = parseMaybeJson(row.attributes) || {};
+          const numeric = value => typeof value === "number" ? value : undefined;
+          return {
+            operation: attributes["gen_ai.operation"],
+            model: attributes["gen_ai.model"],
+            status: attributes.status || (row.level === "ERROR" ? "error" : "ok"),
+            duration_ms: numeric(attributes.duration_ms),
+            input_tokens: numeric(attributes.input_tokens),
+            output_tokens: numeric(attributes.output_tokens),
+            total_tokens: numeric(attributes.total_tokens),
+            cache_hit_tokens: numeric(attributes.cache_hit_tokens),
+            error_type: row.error_type || attributes["error.type"]
+          };
+        });
+      if (!calls.length) {
+        const empty = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.className = "llm-empty";
+        cell.colSpan = 8;
+        cell.textContent = "该运行没有模型调用记录";
+        empty.appendChild(cell);
+        ui.llmRows.appendChild(empty);
+        return;
+      }
+      calls.forEach(addLLMCall);
+    }
+
+    function addSessionSnapshot(snapshot) {
+      const deviceId = snapshot.device_id;
+      if (!["dog-a", "dog-b"].includes(deviceId)) return;
+
+      const history = document.getElementById(`sessionHistory-${deviceId}`);
+      const stateNode = document.getElementById(`sessionState-${deviceId}`);
+      const empty = history.querySelector(".session-empty");
+      if (empty) empty.remove();
+      history.querySelectorAll("details").forEach(item => {
+        item.open = false;
+      });
+
+      const exists = snapshot.exists === true && snapshot.session;
+      const phaseLabel = SESSION_PHASE_LABELS[snapshot.phase] || "运行时状态";
+      const rawSessionState = exists ? snapshot.session.state : "cleared";
+      const sessionState = SESSION_STATE_LABELS[String(rawSessionState || "").toLowerCase()] || (exists ? "状态已记录" : "已清理");
+      const sessionVersion = exists && snapshot.session.session_version != null
+        ? ` · v${snapshot.session.session_version}`
+        : "";
+
+      stateNode.textContent = sessionState;
+      const details = document.createElement("details");
+      details.className = `session-snapshot${exists ? "" : " cleared"}`;
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${phaseLabel} · ${sessionState}${sessionVersion}`;
+      const content = document.createElement("pre");
+      content.textContent = JSON.stringify(snapshot, null, 2);
+      details.append(summary, content);
+      history.appendChild(details);
+    }
+
+    function setEmpty(node, text) {
+      node.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "obs-empty";
+      empty.textContent = text;
+      node.appendChild(empty);
+    }
+
+    function showRaw(value) {
+      ui.rawJson.textContent = JSON.stringify(value, null, 2);
+      ui.technicalDiagnostics.open = true;
+      ui.rawPanel.open = true;
+      ui.rawPanel.scrollIntoView({behavior: "smooth", block: "nearest"});
+    }
+
+    async function apiJson(path, options) {
+      const response = await fetch(path, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
+      return body;
+    }
+
+    function runLabel(run) {
+      const status = run.status || (run.done ? (run.error ? "failed" : "completed") : "running");
+      const instruction = run.instruction || run.task_id || "";
+      return `${String(run.run_id || "").slice(0, 8)} · ${statusLabel(status)} · ${instruction}`.slice(0, 100);
+    }
+
+    async function loadRunList(preferredRunId) {
+      try {
+        const body = await apiJson("/api/runs?limit=100");
+        const runs = Array.isArray(body.runs) ? body.runs : [];
+        knownRuns = runs;
+        ui.runSelector.replaceChildren();
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = runs.length ? "选择一次历史执行" : "暂无历史执行记录";
+        ui.runSelector.appendChild(placeholder);
+        runs.forEach(run => {
+          const option = document.createElement("option");
+          option.value = run.run_id;
+          option.textContent = runLabel(run);
+          ui.runSelector.appendChild(option);
+        });
+        if (preferredRunId && runs.some(run => run.run_id === preferredRunId)) {
+          ui.runSelector.value = preferredRunId;
+        } else if (!currentRunId && runs.length) {
+          ui.runSelector.value = runs[0].run_id;
+          queueMicrotask(() => loadHistoricalRun(runs[0].run_id));
+        }
+      } catch (error) {
+        ui.stageText.textContent = `历史索引不可用：${error.message}`;
+      }
+    }
+
+    function parseMaybeJson(value) {
+      if (typeof value !== "string") return value;
+      try { return JSON.parse(value); } catch (_) { return value; }
+    }
+
+    function blackboardFromTimeline(row) {
+      const kind = row.kind || row.event_type || row.name;
+      let data = parseMaybeJson(row.data ?? row.payload);
+      if (kind === "blackboard_event" && data && typeof data === "object") return data;
+      if (data && typeof data === "object" && data.type && data.content) return data;
+      if (row.type && row.content) return row;
+      if (row.category === "blackboard" && row.name === "blackboard.event.committed") {
+        const attributes = parseMaybeJson(row.attributes) || {};
+        const eventType = attributes.event_type || attributes.type || attributes["event.type"] || String(row.name || "").split(".").pop();
+        const summarized = parseMaybeJson(row.payload_summary);
+        const content = summarized && typeof summarized === "object"
+          ? {...summarized}
+          : {};
+        const put = (key, ...values) => {
+          const value = firstDefined(...values);
+          if (value !== undefined) content[key] = value;
+        };
+        put("goal", attributes["task.goal_summary"]);
+        put("task_type", attributes["task.task_type"]);
+        put("priority", attributes["task.priority"]);
+        put("device_id", attributes["action.device_id"], attributes["receipt.device_id"], attributes["bid.device_id"], attributes["assignment.device_id"], attributes["completion.device_id"], attributes["device.id"], attributes["agent.id"]);
+        put("verb", attributes["action.verb"]);
+        put("target", attributes["action.target"]);
+        put("success", attributes["receipt.success"]);
+        put("outcome_certainty", attributes["receipt.outcome_certainty"]);
+        put("post_check_allowed", attributes["receipt.post_check_allowed"]);
+        put("failure_reason", attributes["receipt.failure_reason"]);
+        put("safety_phase", attributes["safety.phase"]);
+        put("risk_level", attributes["safety.risk_level"]);
+        put("reason_code", attributes["safety.reason_code"]);
+        put("safety_reason", attributes["safety.reason"]);
+        put("failed_component", attributes["failure.component"]);
+        const slots = attributes["bid.slots"];
+        if (Array.isArray(slots)) content.slots = slots;
+        if (eventType === "bid") {
+          content.offers = [{
+            slot_id: attributes["bid.slot_id"],
+            decision: attributes["bid.decision"],
+            metrics: {
+              battery_margin: attributes["bid.battery_margin"],
+              reliability: attributes["bid.reliability"]
+            }
+          }];
+          content.proposal = {confidence: attributes["bid.confidence"]};
+        }
+        if (eventType === "task_assigned" && attributes["assignment.device_id"]) {
+          content.assignments = [{
+            device_id: attributes["assignment.device_id"],
+            slot_id: attributes["assignment.slot_id"]
+          }];
+        }
+        return {
+          type: eventType,
+          source: attributes.source || attributes["event.source"] || attributes.module || "blackboard",
+          version: firstDefined(attributes.version, attributes["blackboard.version"], Number(row.event_offset) + 1, row.sequence),
+          content
+        };
+      }
+      return null;
+    }
+
+    function addGenericTimeline(row, index) {
+      const empty = ui.timeline.querySelector(".empty");
+      if (empty) empty.remove();
+      const item = document.createElement("article");
+      item.className = "event-row";
+      const version = document.createElement("div");
+      version.className = "event-version";
+      version.textContent = `#${row.seq || row.offset || row.id || index + 1}`;
+      const dot = document.createElement("div");
+      dot.className = "event-dot";
+      const card = document.createElement("div");
+      card.className = "event-card";
+      const type = document.createElement("div");
+      type.className = "event-type";
+      type.textContent = row.kind || row.event_type || row.name || "observation";
+      const summary = document.createElement("div");
+      summary.className = "event-summary";
+      summary.textContent = row.summary || row.message || row.operation || "已记录观测事件";
+      card.append(type, summary);
+      item.append(version, dot, card);
+      item.addEventListener("click", () => showRaw(row));
+      ui.timeline.appendChild(item);
+    }
+
+    function renderHistoricalTimeline(rows) {
+      ui.timeline.replaceChildren();
+      receivedEvents = [];
+      counts = {};
+      renderFlow();
+      const events = rows
+        .map(row => blackboardFromTimeline(row))
+        .filter(Boolean);
+      if (!events.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "该运行没有可回放的已确认协同事实";
+        ui.timeline.appendChild(empty);
+        return [];
+      }
+      events.forEach(event => addEvent(event));
+      return events;
+    }
+
+    function spanId(span) {
+      return span.span_id || span.id || "";
+    }
+
+    function spanParent(span) {
+      return span.parent_span_id || span.parent_id || "";
+    }
+
+    function renderTrace(trace) {
+      const spans = Array.isArray(trace.spans) ? trace.spans : [];
+      ui.traceSummary.textContent = `${spans.length} 个调用步骤`;
+      ui.traceTree.replaceChildren();
+      if (!spans.length) {
+        setEmpty(ui.traceTree, "Trace 数据未启用或尚未落盘");
+        renderPayloads([], trace.payloads || []);
+        return;
+      }
+      const byParent = new Map();
+      spans.forEach(span => {
+        const parent = spanParent(span);
+        if (!byParent.has(parent)) byParent.set(parent, []);
+        byParent.get(parent).push(span);
+      });
+      const visited = new Set();
+      const rows = [];
+      function visit(span, depth) {
+        const id = spanId(span);
+        if (id && visited.has(id)) return;
+        if (id) visited.add(id);
+        rows.push([span, depth]);
+        (byParent.get(id) || []).forEach(child => visit(child, depth + 1));
+      }
+      const roots = spans.filter(span => !spanParent(span) || !spans.some(other => spanId(other) === spanParent(span)));
+      roots.forEach(span => visit(span, 0));
+      spans.filter(span => !visited.has(spanId(span))).forEach(span => visit(span, 0));
+      rows.forEach(([span, depth]) => {
+        const row = document.createElement("div");
+        const status = String(span.status || span.status_code || "OK");
+        row.className = `obs-row trace-row ${/error|fail/i.test(status) ? "failed" : ""}`;
+        row.style.marginLeft = `${Math.min(depth, 8) * 14}px`;
+        const name = document.createElement("div");
+        const rawName = span.name || span.operation || "span";
+        name.textContent = `${SPAN_LABELS[rawName] || "内部处理步骤"} · ${durationText(Number(span.duration_ms))}`;
+        const raw = document.createElement("div");
+        raw.className = "technical-name";
+        raw.textContent = rawName;
+        const meta = document.createElement("div");
+        meta.className = "trace-meta";
+        const links = Array.isArray(span.links) ? span.links.length : (span.link_count || 0);
+        meta.textContent = `${/error|fail/i.test(status) ? "失败" : "正常"}${links ? ` · 关联 ${links} 个并行分支` : ""}`;
+        row.append(name, raw, meta);
+        row.addEventListener("click", () => showRaw(span));
+        ui.traceTree.appendChild(row);
+      });
+      renderPayloads(spans, trace.payloads || []);
+    }
+
+    function renderPayloads(spans, suppliedPayloads) {
+      const payloads = [];
+      (Array.isArray(suppliedPayloads) ? suppliedPayloads : []).forEach(item => payloads.push(item));
+      spans.forEach(span => {
+        [
+          ["input", span.input_payload_id, span.input_summary],
+          ["output", span.output_payload_id, span.output_summary],
+          ["payload", span.payload_id, span.payload_summary]
+        ].forEach(([direction, id, summary]) => {
+          if (id) payloads.push({payload_id: id, direction, summary, span_name: span.name});
+        });
+      });
+      const unique = new Map();
+      payloads.forEach(payload => {
+        const id = payload.payload_id || payload.id;
+        if (id) unique.set(String(id), payload);
+      });
+      ui.payloadList.replaceChildren();
+      if (!unique.size) {
+        setEmpty(ui.payloadList, "当前采集模式没有可读取的 payload");
+        return;
+      }
+      unique.forEach((payload, id) => {
+        const row = document.createElement("div");
+        row.className = "obs-row";
+        const direction = {input: "输入", output: "输出", payload: "事件内容"}[payload.direction] || "数据";
+        const rawName = payload.span_name || payload.operation || "";
+        row.textContent = `${direction} · ${SPAN_LABELS[rawName] || "内部处理步骤"}\n${payload.summary || payload.safe_summary || "已按采集策略保存"}`;
+        row.addEventListener("click", async () => {
+          try {
+            showRaw(await apiJson(`/api/runs/${encodeURIComponent(currentRunId)}/payloads/${encodeURIComponent(id)}`));
+          } catch (error) {
+            ui.stageText.textContent = `payload 不可用：${error.message}`;
+          }
+        });
+        ui.payloadList.appendChild(row);
+      });
+    }
+
+    function renderLogs() {
+      const level = ui.logLevel.value;
+      const needle = ui.logSearch.value.trim().toLowerCase();
+      const combined = [...cachedErrors, ...cachedLogs];
+      const seen = new Set();
+      const filtered = combined.filter(row => {
+        const key = JSON.stringify(row);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        if (level && String(row.level || row.severity || "").toUpperCase() !== level) return false;
+        return !needle || key.toLowerCase().includes(needle);
+      });
+      ui.logRows.replaceChildren();
+      if (!filtered.length) {
+        setEmpty(ui.logRows, cachedErrors.length || cachedLogs.length ? "当前筛选条件下没有匹配记录" : "本次运行没有产生日志或异常记录");
+        return;
+      }
+      filtered.forEach(log => {
+        const row = document.createElement("div");
+        const severity = String(log.level || log.severity || "INFO").toUpperCase();
+        row.className = `obs-row ${/ERROR|CRITICAL/.test(severity) ? "error-row" : ""}`;
+        const levelLabel = {INFO: "运行信息", WARNING: "运行警告", ERROR: "运行异常", CRITICAL: "严重异常"}[severity] || severity;
+        const operation = log.operation || "";
+        row.textContent = `${levelLabel} · ${OPERATION_LABELS[operation] || "V2 运行过程"}\n${log.message || log.error || log.error_type || "已记录运行状态"}`;
+        row.addEventListener("click", () => showRaw(log));
+        ui.logRows.appendChild(row);
+      });
+    }
+
+    function renderMetrics(body) {
+      const metrics = Array.isArray(body.metrics)
+        ? body.metrics
+        : Object.entries(body.metrics || {}).map(([name, value]) => ({name, value}));
+      ui.metricRows.replaceChildren();
+      if (!metrics.length) {
+        setEmpty(ui.metricRows, "该运行暂无聚合指标");
+        return;
+      }
+      metrics.forEach(metric => {
+        const row = document.createElement("div");
+        row.className = "obs-row";
+        const value = metric.value ?? metric.sum ?? metric.count ?? "—";
+        const rawName = metric.name || metric.metric_name || "metric";
+        const unit = metric.unit || (rawName.endsWith("_ms") ? "ms" : "");
+        row.textContent = `${METRIC_LABELS[rawName] || "内部性能指标"}：${typeof value === "number" ? formatNumber(value) : value}${unit ? ` ${unit}` : ""}\n${rawName}`;
+        row.addEventListener("click", () => showRaw(metric));
+        ui.metricRows.appendChild(row);
+      });
+    }
+
+    async function loadHealth() {
+      try {
+        const health = await apiJson("/api/health");
+        ui.healthStrip.replaceChildren();
+        const service = document.createElement("span");
+        service.className = `health-chip ${health.status === "ok" ? "" : "degraded"}`;
+        service.textContent = `观测服务：${health.status === "ok" ? "正常" : "降级"}`;
+        ui.healthStrip.appendChild(service);
+        const storeLabels = {
+          observability: "观测存储",
+          memory: "记忆存储"
+        };
+        Object.entries(health.stores || {}).forEach(([name, state]) => {
+          const chip = document.createElement("span");
+          const status = state.status || "unknown";
+          chip.className = `health-chip ${["ok", "healthy"].includes(status) ? "" : "degraded"}`;
+          const stateLabel = ["ok", "healthy"].includes(status)
+            ? "正常"
+            : status === "degraded"
+              ? "降级"
+              : status === "disabled"
+                ? "未启用"
+                : "状态未知";
+          chip.textContent = `${storeLabels[name] || "内部存储"}：${stateLabel}`;
+          ui.healthStrip.appendChild(chip);
+        });
+      } catch (error) {
+        ui.healthStrip.textContent = `暂时无法读取观测服务健康状态：${error.message}`;
+      }
+    }
+
+    async function loadMemoryCandidates() {
+      try {
+        const body = await apiJson("/api/memory/candidates?status=pending_review&limit=200");
+        const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+        ui.memoryCandidates.replaceChildren();
+        if (!candidates.length) {
+          setEmpty(ui.memoryCandidates, body.degraded ? "Memory 存储未启用" : "暂无待审核候选");
+          return;
+        }
+        candidates.forEach(candidate => {
+          const id = candidate.candidate_id || candidate.id;
+          const card = document.createElement("div");
+          card.className = "obs-row candidate-card";
+          const text = document.createElement("div");
+          text.textContent = `${candidate.kind || candidate.candidate_type || "candidate"} · ${id}\n${candidate.summary || candidate.content || candidate.fact || JSON.stringify(candidate.payload || {})}`;
+          const actions = document.createElement("div");
+          actions.className = "candidate-actions";
+          [["approved", "批准", ""], ["rejected", "拒绝", "reject"]].forEach(([decision, label, className]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = className;
+            button.textContent = label;
+            button.addEventListener("click", () => decideCandidate(id, decision, card));
+            actions.appendChild(button);
+          });
+          const sourceRun = knownRuns.find(run => run.trace_id && run.trace_id === candidate.source_trace_id);
+          if (sourceRun) {
+            const sourceButton = document.createElement("button");
+            sourceButton.type = "button";
+            sourceButton.textContent = "来源 Trace";
+            sourceButton.style.background = "var(--blue)";
+            sourceButton.addEventListener("click", () => {
+              ui.runSelector.value = sourceRun.run_id;
+              loadHistoricalRun(sourceRun.run_id);
+            });
+            actions.appendChild(sourceButton);
+          }
+          card.append(text, actions);
+          card.addEventListener("dblclick", () => showRaw(candidate));
+          ui.memoryCandidates.appendChild(card);
+        });
+      } catch (error) {
+        setEmpty(ui.memoryCandidates, `候选加载失败：${error.message}`);
+      }
+    }
+
+    async function decideCandidate(id, decision, card) {
+      try {
+        await apiJson(`/api/memory/candidates/${encodeURIComponent(id)}/decision`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({decision})
+        });
+        card.remove();
+        if (!ui.memoryCandidates.children.length) setEmpty(ui.memoryCandidates, "暂无待审核候选");
+      } catch (error) {
+        ui.stageText.textContent = `审核失败：${error.message}`;
+      }
+    }
+
+    async function loadHistoricalRun(runId) {
+      if (!runId) return;
+      if (source) source.close();
+      currentRunId = runId;
+      resetUI();
+      ui.viewMode.textContent = "历史回放";
+      ui.runId.textContent = `记录 ${runId.slice(0, 8)}`;
+      ui.connection.classList.remove("connected");
+      ui.connectionText.textContent = "历史快照";
+      ui.stageText.textContent = "正在读取持久化 Trace、日志、指标与事件…";
+      try {
+        const [detail, timeline, trace, logs, errors, metrics] = await Promise.all([
+          apiJson(`/api/runs/${encodeURIComponent(runId)}`),
+          apiJson(`/api/runs/${encodeURIComponent(runId)}/timeline?limit=10000`),
+          apiJson(`/api/runs/${encodeURIComponent(runId)}/trace`),
+          apiJson(`/api/runs/${encodeURIComponent(runId)}/logs?limit=1000`),
+          apiJson(`/api/runs/${encodeURIComponent(runId)}/errors?limit=1000`),
+          apiJson(`/api/runs/${encodeURIComponent(runId)}/metrics`)
+        ]);
+        const businessEvents = renderHistoricalTimeline(timeline.events || []);
+        renderHistoricalLlmCalls(timeline.events || []);
+        renderTrace(trace);
+        cachedLogs = logs.logs || [];
+        cachedErrors = errors.errors || [];
+        ui.errorSummary.textContent = `${cachedErrors.length} 条异常`;
+        renderLogs();
+        renderMetrics(metrics);
+        ui.runDuration.textContent = durationText(Number(detail.duration_ms));
+        const known = knownRuns.find(run => run.run_id === runId) || {};
+        const posted = businessEvents.find(event => event.type === "task_posted");
+        ui.taskGoal.textContent = detail.instruction || known.instruction || posted?.content?.goal || detail.task_id || "任务内容未持久化";
+        const result = parseMaybeJson(detail.result);
+        if (result && result.runtime && result.task) applyResult(result);
+        else {
+          const runStatus = detail.status || (detail.done ? "completed" : "running");
+          ui.taskStatus.textContent = statusLabel(runStatus);
+          ui.taskStatus.className = `metric-value ${["ok", "done", "success", "completed"].includes(String(runStatus).toLowerCase()) ? "success" : ["failed", "error"].includes(String(runStatus).toLowerCase()) ? "error" : ""}`;
+          const captureMode = detail.capture_mode || detail.collection_mode;
+          const captureLabel = {metadata: "标准记录", errors: "异常详情", full: "完整调试"}[captureMode] || "标准记录";
+          ui.modelName.textContent = `V2 协同链路 · ${captureLabel}`;
+          setOutcome(runStatus, detail.error_message || detail.error);
+          setBusinessAlerts(cachedErrors, runStatus);
+        }
+        const runError = detail.error_message || detail.error;
+        ui.stageText.textContent = runError ? `运行失败：${runError}` : "历史运行已加载；主视图展示业务过程，技术字段可按需展开。";
+      } catch (error) {
+        ui.stageText.textContent = `历史运行加载失败：${error.message}`;
+        ui.stageText.classList.add("error");
+      }
+    }
+
+    function handleMessage(message) {
+      const data = message.data || {};
+      lastSequence = Math.max(lastSequence, Number(message.seq || 0));
+      if (message.kind === "status") {
+        ui.stageText.textContent = data.message || data.stage;
+      } else if (message.kind === "llm_call") {
+        addLLMCall(data);
+      } else if (message.kind === "agent_session") {
+        addSessionSnapshot(data);
+      } else if (message.kind === "blackboard_event") {
+        addEvent(data);
+      } else if (message.kind === "result") {
+        applyResult(data);
+        ui.stageText.textContent = "闭环完成：任务已正式完成，任务内临时状态已清理。";
+        finishConnection("运行完成");
+        loadRunList(currentRunId);
+        setTimeout(() => loadHistoricalRun(currentRunId), 150);
+      } else if (message.kind === "error") {
+        ui.stageText.textContent = data.message || "运行失败";
+        ui.stageText.classList.add("error");
+        ui.taskStatus.textContent = "运行异常";
+        ui.taskStatus.className = "metric-value error";
+        setOutcome("error", data.message);
+        setBusinessAlerts([{message: data.message || "运行失败"}], "error");
+        finishConnection("运行失败");
+        loadRunList(currentRunId);
+        setTimeout(() => loadHistoricalRun(currentRunId), 150);
+      }
+    }
+
+    async function startRun() {
+      const instruction = ui.instruction.value.trim();
+      if (!instruction) return;
+      if (source) source.close();
+      resetUI();
+      ui.viewMode.textContent = "实时模式";
+      ui.runButton.disabled = true;
+      ui.stageText.classList.remove("error");
+      ui.stageText.textContent = "正在创建运行实例…";
+      ui.connection.classList.add("connected");
+      ui.connectionText.textContent = "连接中";
+      try {
+        const response = await fetch("/api/runs", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({instruction, capture_mode: ui.captureMode.value})
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.message || body.error || "无法启动任务");
+        currentRunId = body.run_id;
+        ui.runId.textContent = `记录 ${body.run_id.slice(0, 8)}`;
+        ui.runSelector.value = body.run_id;
+        source = new EventSource(body.events_url);
+        source.onopen = () => {
+          ui.connection.classList.add("connected");
+          ui.connectionText.textContent = "实时连接";
+        };
+        source.onmessage = event => {
+          lastSequence = Math.max(lastSequence, Number(event.lastEventId || 0));
+          handleMessage(JSON.parse(event.data));
+        };
+        source.onerror = async () => {
+          if (ui.runButton.disabled) {
+            ui.connectionText.textContent = `重连中 · #${lastSequence}`;
+            try {
+              const detail = await apiJson(`/api/runs/${encodeURIComponent(currentRunId)}`);
+              const terminal = detail.done === true || ["ok", "success", "done", "completed", "failed", "error"].includes(String(detail.status || "").toLowerCase());
+              if (terminal) {
+                finishConnection(detail.error_message || detail.error || ["failed", "error"].includes(String(detail.status || "").toLowerCase()) ? "运行失败" : "运行完成");
+                await loadRunList(currentRunId);
+                setTimeout(() => loadHistoricalRun(currentRunId), 150);
+              }
+            } catch (_) {
+              // EventSource keeps Last-Event-ID and retries automatically.
+            }
+          }
+        };
+      } catch (error) {
+        ui.stageText.textContent = error.message;
+        ui.stageText.classList.add("error");
+        finishConnection("启动失败");
+      }
+    }
+
+    function finishConnection(label) {
+      ui.runButton.disabled = false;
+      ui.connection.classList.remove("connected");
+      ui.connectionText.textContent = label;
+      if (source) source.close();
+    }
+
+    function formatNumber(value) {
+      return typeof value === "number" ? value.toFixed(2) : "—";
+    }
+
+    function formatPercent(value) {
+      return typeof value === "number" ? `${Math.round(value * 100)}%` : "—";
+    }
+
+    function tokenText(value) {
+      return typeof value === "number" ? String(value) : "—";
+    }
+
+    function durationText(value) {
+      if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+      return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(0)} ms`;
+    }
+
+    ui.runButton.addEventListener("click", startRun);
+    ui.refreshRuns.addEventListener("click", () => loadRunList(currentRunId));
+    ui.runSelector.addEventListener("change", () => loadHistoricalRun(ui.runSelector.value));
+    ui.logLevel.addEventListener("change", renderLogs);
+    ui.logSearch.addEventListener("input", renderLogs);
+    ui.refreshMemory.addEventListener("click", loadMemoryCandidates);
+    ui.instruction.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !ui.runButton.disabled) startRun();
+    });
+    renderFlow();
+    loadRunList();
+    loadHealth();
+    loadMemoryCandidates();
+  </script>
+</body>
+</html>
