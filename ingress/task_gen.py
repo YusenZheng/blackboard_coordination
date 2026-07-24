@@ -17,11 +17,14 @@ TODO:意图理解接真 LLM + 结构化输出校验;补全 Agent 群接六类预
 from __future__ import annotations
 
 import abc
-from dataclasses import asdict
+import copy
+import math
+from dataclasses import asdict, fields
 from typing import Optional, Protocol
 
 from ..contracts.task import TaskPackage
-from ..contracts.types import Position, TaskRequirement
+from ..contracts.task_types import SEARCH_TARGET, SUPPORTED_TASK_TYPES
+from ..contracts.types import DeviceType, Position, SpaceConstraint, TaskRequirement
 
 
 class IntentInterpreterPort(Protocol):
@@ -69,9 +72,12 @@ class TaskGen:
         self._intent_interpreter = intent_interpreter
         self._seq = 0
 
-    def generate(self, raw_input: str, media=None) -> TaskPackage:
+    def generate(self, raw_input: str = "帮我找走失的萨摩耶幼犬", media=None) -> TaskPackage:
         # ① 意图理解(MVP:识别"找X" → search_target)
         self._seq += 1
+        self._validate_media(media)
+        if media:
+            raw_input += f"\n多媒体情报信息参考：\n{media}"
         draft = (
             self._intent_interpreter.interpret(raw_input, self._seq)
             if self._intent_interpreter is not None
@@ -81,39 +87,37 @@ class TaskGen:
         # ② 补全 Agent 群
         for ea in self._enrichers:
             draft.update(ea.enrich(draft))
-        # ③ 路由打标 → 挡位 + 初始信任等级
-        # MVP 占位:开放环境找目标、需多机分工 → 分布式自主应征(autonomous);执行前人批(A1)。
-        # TODO:接三标签([目标清晰度][环境开放度][风险等级])+ 在线设备数真判定,别用返回同值的假分支冒充。
-        mode, autonomy = "autonomous", "A1"
-        draft["mode"] = mode
-        required_capabilities = list(
-            draft.get("required_capability_ids") or ["G01"]
-        )
-        role_slots = list(draft.get("role_slots") or self._default_role_slots())
-        area_value = draft.get("area") or {"label": "公园", "area": "公园"}
-        if not isinstance(area_value, dict):
-            raise ValueError("intent draft area must be an object")
+        return self._task_from_interpreted_draft(draft)
+
+    def _task_from_interpreted_draft(self, draft: dict) -> TaskPackage:
+        mode = str(draft.get("mode") or "autonomous")
+        autonomy = str(draft.get("initial_autonomy_level") or "A1")
+        required_capabilities = list(draft.get("required_capability_ids") or ["G01"])
+        role_slots = copy.deepcopy(draft.get("role_slots") or self._default_role_slots())
+        area = self._parse_position(draft.get("area") or {"label": "公园", "area": "公园"})
+        min_battery = float(draft.get("min_battery", 0.2))
+        if not 0.0 <= min_battery <= 1.0:
+            raise ValueError("intent draft min_battery must be between 0.0 and 1.0")
+        space_constraints = self._parse_space_constraints(draft.get("space_constraints", []))
         return TaskPackage(
             task_id=draft["task_id"], task_type=draft["task_type"], goal=draft["goal"],
             success_condition=str(
                 draft.get("success_condition") or "目标被近距离确认"
             ),
-            requirement=TaskRequirement(
-                required_capabilities=required_capabilities,
-                min_battery=float(draft.get("min_battery", 0.2)),
-            ),
-            target_profile=draft.get("target_profile", {}),
-            area=Position(
-                label=str(area_value.get("label", "公园")),
-                area=str(area_value.get("area", area_value.get("label", "公园"))),
-            ),
-            priority=str(draft.get("priority", "high")), initial_autonomy_level=autonomy,
-            extra={"mode": mode, "weather": draft.get("weather"),
-                   "space_constraints": draft.get("space_constraints"),
+            safety_constraints=copy.deepcopy(draft.get("safety_constraints") or []),
+            requirement=TaskRequirement(required_capabilities, min_battery, space_constraints),
+            target_profile=copy.deepcopy(draft.get("target_profile") or {}),
+            area=area,
+            priority=str(draft.get("priority") or "high"), initial_autonomy_level=autonomy,
+            extra={"mode": mode, "weather": copy.deepcopy(draft.get("weather")),
+                   "space_constraints": copy.deepcopy(draft.get("space_constraints", [])),
                    "role_slots": role_slots})
 
     @staticmethod
     def _intent(raw: str, seq: int) -> dict:
+        return TaskGen._intent_old(raw, seq)
+    @staticmethod
+    def _intent_old(raw: str, seq: int) -> dict:
         # MVP:写死"找狗";真上接 LLM。id 带序号避免多任务撞 id。
         return {"task_id": f"find_dog_{seq:03d}", "task_type": "search_target",
                 "goal": raw or "帮我找一只走失的萨摩耶幼犬"}
@@ -126,8 +130,57 @@ class TaskGen:
             value = draft.get(field_name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"intent draft requires {field_name}")
+        if draft["task_type"] not in SUPPORTED_TASK_TYPES:
+            raise ValueError(f"unsupported task_type: {draft['task_type']!r}")
         if "role_slots" in draft and not isinstance(draft["role_slots"], list):
             raise ValueError("intent draft role_slots must be a list")
+
+    @staticmethod
+    def _validate_media(media) -> None:
+        if media is not None and not isinstance(media, (str, list, tuple)):
+            raise TypeError("media must be a string, list, tuple, or None")
+
+    @staticmethod
+    def _parse_position(value) -> Position | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("area must be null or an object")
+        allowed = {item.name for item in fields(Position)}
+        unknown = set(value) - allowed
+        if unknown:
+            raise ValueError(f"area contains unknown fields: {sorted(unknown)!r}")
+        label = value.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("area.label must be a non-empty string")
+        return Position(**copy.deepcopy(value))
+
+    @staticmethod
+    def _parse_space_constraints(values) -> list[SpaceConstraint]:
+        if not isinstance(values, list):
+            raise ValueError("space_constraints must be a list")
+        allowed = {item.value for item in DeviceType}
+        parsed = []
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                raise ValueError(f"space_constraints[{index}] must be an object")
+            if set(item) != {"label", "min_gap_cm", "passable_by"}:
+                raise ValueError(f"space_constraints[{index}] has unexpected fields")
+            if not isinstance(item["label"], str) or not item["label"].strip():
+                raise ValueError(f"space_constraints[{index}].label is required")
+            gap = item["min_gap_cm"]
+            if gap is not None and (
+                not isinstance(gap, (int, float)) or isinstance(gap, bool)
+                or not math.isfinite(gap) or gap < 0
+            ):
+                raise ValueError(f"space_constraints[{index}].min_gap_cm is invalid")
+            passable = item["passable_by"]
+            if not isinstance(passable, list) or any(
+                not isinstance(value, str) or value not in allowed for value in passable
+            ):
+                raise ValueError(f"space_constraints[{index}].passable_by is invalid")
+            parsed.append(SpaceConstraint(item["label"], gap, copy.deepcopy(passable)))
+        return parsed
 
     @staticmethod
     def _default_role_slots() -> list[dict]:
@@ -158,6 +211,9 @@ def task_package_to_v2_content(
     if task_revision < 1:
         raise ValueError("task_revision must be >= 1")
     requirement = asdict(task.requirement) if task.requirement is not None else {}
+    role_slots = copy.deepcopy(task.extra.get("role_slots") or [])
+    if not role_slots:
+        role_slots = TaskGen._default_role_slots()
     return {
         "schema_version": 2,
         "task_id": task.task_id,
@@ -170,7 +226,7 @@ def task_package_to_v2_content(
         "requirement": requirement,
         "target_profile": dict(task.target_profile),
         "area": asdict(task.area) if task.area is not None else None,
-        "role_slots": list(task.extra.get("role_slots", [])),
+        "role_slots": role_slots,
         "extra": {
             key: value
             for key, value in task.extra.items()
