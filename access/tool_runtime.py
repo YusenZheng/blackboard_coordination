@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from typing import Callable, Optional
@@ -25,12 +26,14 @@ class ToolRuntime:
         adapters: Optional[dict] = None,
         blackboard=None,
         trace_listener: Optional[ToolTraceListener] = None,
+        observability=None,
     ) -> None:
         self.catalog = catalog
         self.device_registry = device_registry
         self.adapters = adapters or {}
         self.blackboard = blackboard
         self.trace_listener = trace_listener
+        self.observability = observability
         self.matcher = CapabilityMatcher()
         self._idempotency: dict[str, tuple[str, ToolCallResult]] = {}
 
@@ -39,6 +42,57 @@ class ToolRuntime:
         return spec is not None and self._binding(spec, device_id).status == "available"
 
     def invoke(self, request: ToolCallRequest) -> ToolCallResult:
+        attributes = {
+            "task.id": request.task_id or "",
+            "agent.id": request.agent_id or "",
+            "device.id": request.device_id or "",
+            "tool.id": request.tool_id,
+            "tool.call.id": request.call_id,
+        }
+        with _span(
+            self.observability,
+            "tool.invoke",
+            attributes,
+            input_payload=request.arguments,
+        ) as span:
+            try:
+                result = self._invoke(request)
+                span.set_attribute("tool.success", bool(result.success))
+                if result.error_code:
+                    span.set_attribute("tool.error_code", result.error_code)
+                if not result.success:
+                    span.record_exception(
+                        RuntimeError(
+                            f"tool call failed: {result.error_code or 'UNKNOWN'}"
+                        )
+                    )
+                span.set_output(result)
+                _histogram(
+                    self.observability,
+                    "tool.duration_ms",
+                    result.duration_ms,
+                    {
+                        "tool.id": result.tool_id,
+                        "success": str(bool(result.success)).lower(),
+                        "error_code": result.error_code or "",
+                    },
+                )
+                _counter(
+                    self.observability,
+                    "tool.call.count",
+                    {
+                        "tool.id": result.tool_id,
+                        "success": str(bool(result.success)).lower(),
+                        "error_code": result.error_code or "",
+                        "outcome_certainty": result.outcome_certainty,
+                    },
+                )
+                return result
+            except Exception as exc:
+                span.record_exception(exc)
+                raise
+
+    def _invoke(self, request: ToolCallRequest) -> ToolCallResult:
         started = time.perf_counter()
         spec = self.catalog.get(request.tool_id)
         canonical_id = spec.tool_id if spec is not None else request.tool_id
@@ -112,7 +166,25 @@ class ToolRuntime:
         receipt = None
         if spec.executor_type == "device":
             if request.action_intent is not None:
-                receipt = self.adapters[request.device_id].execute(request.action_intent)
+                with _span(
+                    self.observability,
+                    "adapter.execute",
+                    {
+                        "task.id": request.task_id or "",
+                        "device.id": request.device_id or "",
+                        "tool.id": spec.tool_id,
+                        "adapter.id": binding.adapter_id or "",
+                    },
+                    input_payload=request.arguments,
+                ) as span:
+                    try:
+                        receipt = self.adapters[request.device_id].execute(
+                            request.action_intent
+                        )
+                        span.set_output(receipt)
+                    except Exception as exc:
+                        span.record_exception(exc)
+                        raise
                 value = dict(receipt.result)
                 success = bool(receipt.success)
                 error_code = None if success else ToolErrorCode.EXECUTION_FAILED.value
@@ -225,3 +297,42 @@ def _json_value(value):
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_json_value(item) for item in value]
     return str(value)
+
+
+class _NullSpan:
+    def set_output(self, payload):
+        return None
+
+    def record_exception(self, exc):
+        return None
+
+    def set_attribute(self, name, value):
+        return None
+
+
+def _span(observability, name, attributes=None, *, input_payload=None):
+    factory = getattr(observability, "span", None)
+    if callable(factory):
+        try:
+            return factory(name, attributes=attributes, input_payload=input_payload)
+        except Exception:
+            pass
+    return nullcontext(_NullSpan())
+
+
+def _histogram(observability, name, value, attributes):
+    recorder = getattr(observability, "histogram", None)
+    if callable(recorder):
+        try:
+            recorder(name, value, attributes=attributes)
+        except Exception:
+            pass
+
+
+def _counter(observability, name, attributes):
+    recorder = getattr(observability, "counter", None)
+    if callable(recorder):
+        try:
+            recorder(name, attributes=attributes)
+        except Exception:
+            pass

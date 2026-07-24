@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from typing import Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from .agent_card import AgentCard
 from .blackboard_event import AppendResult, BlackboardEvent, EventType, Ledger, StoredEvent
@@ -217,6 +217,52 @@ class TracePort(Protocol):
     def record_model_detail(self, intent_id: str, detail: dict) -> None:
         """记模型级细节(prompt/中间推理),黑板不承载,Trace 独有。"""
         ...
+
+
+class ObservabilitySpanHandle(Protocol):
+    """Mutable handle returned by ``ObservabilityPort.span``."""
+
+    def set_output(self, payload: Any) -> None: ...
+    def record_exception(self, exc: BaseException) -> None: ...
+    def set_attribute(self, name: str, value: Any) -> None: ...
+
+
+class ObservabilityPort(Protocol):
+    """Non-blocking trace, event and metric boundary used by coordination-v2."""
+
+    def span(
+        self,
+        name: str,
+        attributes: Optional[dict[str, Any]] = None,
+        links: Optional[list[Any]] = None,
+        input_payload: Any = None,
+    ) -> Any:
+        """Return a context manager yielding an ``ObservabilitySpanHandle``."""
+        ...
+
+    def event(
+        self,
+        name: str,
+        attributes: Optional[dict[str, Any]] = None,
+        payload: Any = None,
+        level: str = "INFO",
+    ) -> None: ...
+
+    def counter(
+        self,
+        name: str,
+        value: int | float = 1,
+        attributes: Optional[dict[str, Any]] = None,
+    ) -> None: ...
+
+    def histogram(
+        self,
+        name: str,
+        value: int | float,
+        attributes: Optional[dict[str, Any]] = None,
+    ) -> None: ...
+
+    def flush(self, timeout_s: float = 2.0) -> bool: ...
 
 
 # ════════════════════════════════════════════════════════════════════════

@@ -90,6 +90,10 @@ def event_to_dict(event: BlackboardEvent) -> dict[str, Any]:
         "version": 0,
         "idempotency_key": event.idempotency_key,
         "extra": to_json_value(event.extra),
+        "trace_carrier": {
+            str(key): str(item)
+            for key, item in dict(event.trace_carrier or {}).items()
+        },
     }
 
 
@@ -111,6 +115,10 @@ def event_from_dict(value: dict[str, Any]) -> BlackboardEvent:
         version=int(value.get("version", 0)),
         idempotency_key=value.get("idempotency_key"),
         extra=dict(value.get("extra", {})),
+        trace_carrier={
+            str(key): str(item)
+            for key, item in dict(value.get("trace_carrier", {})).items()
+        },
     )
 
 

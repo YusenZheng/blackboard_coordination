@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+.venv/
 
 # Local runtime state and secrets.
 runtime_data/

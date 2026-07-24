@@ -6,10 +6,12 @@ Host 负责 I/O、上下文装配、Effect 执行和消费位置提交；PureAge
 """
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import queue
 import time
+from contextlib import nullcontext
 from dataclasses import asdict
 from typing import Any, Callable, Optional
 
@@ -96,6 +98,8 @@ class AgentProcessHost:
         local_proposal_policy: Optional[LocalProposalPolicyPort] = None,
         mailbox_size: int = 100,
         view_timeout_s: float = 3.0,
+        observability: Any = None,
+        memory: Any = None,
     ) -> None:
         self.spec = spec
         self.blackboard = blackboard
@@ -107,6 +111,9 @@ class AgentProcessHost:
         self.local_proposal_policy = local_proposal_policy
         self.mailbox = SimpleMailbox(mailbox_size)
         self.view_timeout_s = view_timeout_s
+        self.observability = observability
+        self.memory = memory
+        self.last_bid_span_context: Any = None
         self.last_local_proposal_error: Optional[str] = None
         self._running = False
         self._current_input_offset: Optional[int] = None
@@ -165,6 +172,46 @@ class AgentProcessHost:
     def _handle_envelope(self, envelope: EventEnvelope) -> bool:
         event = envelope.event
         content = event_content(event)
+        event_type = event_type_value(event)
+        operation = (
+            "agent.process_bid_round"
+            if event_type == CoordinationEventType.BID_ROUND_OPENED.value
+            else "agent.assignment.consume"
+            if event_type == CoordinationEventType.TASK_ASSIGNED.value
+            else "agent.event.consume"
+        )
+        attributes = {
+            "agent.id": self.spec.device_id,
+            "device.id": self.spec.device_id,
+            "event.id": event.id,
+            "event.type": event_type,
+            "blackboard.offset": envelope.offset,
+            "task.id": str(content.get("task_id", "")),
+            "task.revision": int(content.get("task_revision", 1)),
+            "coordination.epoch": int(content.get("coordination_epoch", 0)),
+        }
+        with _consumer_context(self.observability, event.trace_carrier):
+            with _span(
+                self.observability,
+                operation,
+                attributes,
+                input_payload=content,
+            ) as span:
+                try:
+                    consumed = self._handle_envelope_impl(envelope)
+                    span.set_output({"consumed": consumed})
+                    if operation == "agent.process_bid_round":
+                        self.last_bid_span_context = getattr(
+                            span, "span_context", None
+                        )
+                    return consumed
+                except Exception as exc:
+                    span.record_exception(exc)
+                    raise
+
+    def _handle_envelope_impl(self, envelope: EventEnvelope) -> bool:
+        event = envelope.event
+        content = event_content(event)
         task_id = str(content.get("task_id", ""))
         if not task_id:
             # ESTOP(scope=all) 没有 task_id 时由 Coordinator 负责失败收敛；Host 只留消费痕迹。
@@ -180,8 +227,15 @@ class AgentProcessHost:
         role_slots = [RoleSlot.from_dict(value) for value in task.get("role_slots", [])]
         availability = self._execution_availability(role_slots)
         skill_references = self._skill_references(task, snapshot)
+        memory_context = self._memory_context(task, event)
         local_proposal = self._local_proposal(
-            event, task_view, snapshot, role_slots, availability, skill_references
+            event,
+            task_view,
+            snapshot,
+            role_slots,
+            availability,
+            skill_references,
+            memory_context,
         )
         evidence_view = self._query_evidence_view(task_id, event.version)
         loop_input = LoopInput(
@@ -195,6 +249,7 @@ class AgentProcessHost:
             execution_availability=availability,
             skill_references=skill_references,
             local_proposal=local_proposal,
+            memory_context=memory_context,
         )
         result = self.loop.step(loop_input)
         if not result.consume_input:
@@ -336,7 +391,88 @@ class AgentProcessHost:
             situation_tags=list(task.get("extra", {}).get("situation_tags", [])),
             capability_ids=list(snapshot.capabilities),
         )
-        return self.skill_provider.search(query, limit=3)
+        with _span(
+            self.observability,
+            "skill.retrieve",
+            {"agent.id": self.spec.device_id, "skill.limit": 3},
+            input_payload=query,
+        ) as span:
+            try:
+                result = self.skill_provider.search(query, limit=3)
+                span.set_attribute("skill.hit_count", len(result))
+                span.set_output(result)
+                return result
+            except Exception as exc:
+                span.record_exception(exc)
+                raise
+
+    def _memory_context(
+        self,
+        task: dict[str, Any],
+        event: BlackboardEvent,
+    ) -> dict[str, Any]:
+        if (
+            self.memory is None
+            or event_type_value(event)
+            != CoordinationEventType.BID_ROUND_OPENED.value
+        ):
+            return {}
+        query = " ".join(
+            str(value)
+            for value in (
+                task.get("goal", ""),
+                task.get("task_type", ""),
+                " ".join(task.get("extra", {}).get("situation_tags", [])),
+            )
+            if value
+        )
+        with _span(
+            self.observability,
+            "memory.retrieve",
+            {
+                "agent.id": self.spec.device_id,
+                "memory.private_limit": 3,
+                "memory.fact_limit": 5,
+            },
+            input_payload={"query": query},
+        ) as span:
+            started = time.perf_counter()
+            try:
+                result = self.memory.retrieve_context(
+                    agent_id=self.spec.device_id,
+                    query=query,
+                    private_limit=3,
+                    fact_limit=5,
+                    max_chars=4000,
+                )
+                span.set_attribute(
+                    "memory.hit_count",
+                    len(result.get("adopted_memory_ids", [])),
+                )
+                span.set_attribute(
+                    "memory.character_count",
+                    int(result.get("character_count", 0)),
+                )
+                span.set_output(result)
+                _histogram(
+                    self.observability,
+                    "memory.retrieve.duration_ms",
+                    (time.perf_counter() - started) * 1000.0,
+                    {"scope": "agent_private_and_shared"},
+                )
+                return dict(result)
+            except Exception as exc:
+                span.record_exception(exc)
+                _event(
+                    self.observability,
+                    "memory.retrieve.degraded",
+                    {
+                        "agent.id": self.spec.device_id,
+                        "error.type": type(exc).__name__,
+                    },
+                    level="WARNING",
+                )
+                return {}
 
     def _local_proposal(
         self,
@@ -346,6 +482,7 @@ class AgentProcessHost:
         role_slots: list[RoleSlot],
         availability: list[ExecutionAvailability],
         skill_references: list,
+        memory_context: dict[str, Any],
     ) -> Optional[CollaborationProposal]:
         self.last_local_proposal_error = None
         if (
@@ -369,7 +506,7 @@ class AgentProcessHost:
             )
             for slot in role_slots
         ]
-        context = {
+        base_context = {
             "task": task,
             "role_slots": role_slots,
             "self_snapshot": snapshot,
@@ -379,7 +516,40 @@ class AgentProcessHost:
             "task_revision": int(content.get("task_revision", 0)),
             "coordination_epoch": int(content.get("coordination_epoch", 0)),
         }
-        context["context_fingerprint"] = fingerprint(context)
+        rendered_base = json.dumps(
+            to_json_value(base_context),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        remaining_memory_chars = max(0, 4000 - len(rendered_base) - 160)
+        memory_injection = {
+            "adopted_memory_ids": list(
+                memory_context.get("adopted_memory_ids", [])
+            )[:8],
+            "context": str(memory_context.get("context", ""))[
+                :remaining_memory_chars
+            ],
+            "character_count": min(
+                int(memory_context.get("character_count", 0)),
+                remaining_memory_chars,
+            ),
+        }
+        with _span(
+            self.observability,
+            "context.assemble",
+            {
+                "agent.id": self.spec.device_id,
+                "task.id": str(content.get("task_id", "")),
+                "context.memory_hits": len(
+                    memory_context.get("adopted_memory_ids", [])
+                ),
+                "context.skill_hits": len(skill_references),
+            },
+        ) as span:
+            context = {**base_context, "memory": memory_injection}
+            context["context_fingerprint"] = fingerprint(context)
+            span.set_output(context)
         try:
             proposal = self.local_proposal_policy.propose(
                 to_json_value(context), self.spec.local_proposal_timeout_s
@@ -496,3 +666,69 @@ def _normalize_envelope(value: Any) -> EventEnvelope:
     if isinstance(value, dict):
         return EventEnvelope(offset=int(value["offset"]), event=value["event"])
     return EventEnvelope(offset=int(value.offset), event=value.event)
+
+
+class _NullSpan:
+    def set_output(self, payload: Any) -> None:
+        return None
+
+    def record_exception(self, exc: BaseException) -> None:
+        return None
+
+    def set_attribute(self, name: str, value: Any) -> None:
+        return None
+
+
+def _span(
+    observability: Any,
+    name: str,
+    attributes: Optional[dict[str, Any]] = None,
+    *,
+    input_payload: Any = None,
+):
+    factory = getattr(observability, "span", None)
+    if callable(factory):
+        try:
+            return factory(name, attributes=attributes, input_payload=input_payload)
+        except Exception:
+            pass
+    return nullcontext(_NullSpan())
+
+
+def _consumer_context(observability: Any, carrier: dict[str, str]):
+    factory = getattr(observability, "consumer_context", None)
+    if callable(factory):
+        try:
+            return factory(carrier)
+        except Exception:
+            pass
+    return nullcontext()
+
+
+def _histogram(
+    observability: Any,
+    name: str,
+    value: float,
+    attributes: dict[str, Any],
+) -> None:
+    recorder = getattr(observability, "histogram", None)
+    if callable(recorder):
+        try:
+            recorder(name, value, attributes=attributes)
+        except Exception:
+            pass
+
+
+def _event(
+    observability: Any,
+    name: str,
+    attributes: dict[str, Any],
+    *,
+    level: str = "INFO",
+) -> None:
+    recorder = getattr(observability, "event", None)
+    if callable(recorder):
+        try:
+            recorder(name, attributes=attributes, level=level)
+        except Exception:
+            pass

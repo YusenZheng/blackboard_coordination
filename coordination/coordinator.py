@@ -6,6 +6,7 @@ Coordinator 只消费 Blackboard 事实并写回协同决策。Group Policy 只�
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -74,6 +75,7 @@ class Coordinator:
         bid_window_s: float = 10.0,
         group_policy_timeout_s: float = 5.0,
         view_timeout_s: float = 5.0,
+        observability: Any = None,
     ) -> None:
         self.blackboard = blackboard
         self.store = store
@@ -82,6 +84,7 @@ class Coordinator:
         self.bid_window_s = bid_window_s
         self.group_policy_timeout_s = group_policy_timeout_s
         self.view_timeout_s = view_timeout_s
+        self.observability = observability
         self._active_rounds: dict[str, ActiveBidRound] = {}
         self._known_tasks: set[tuple[str, int]] = set()
         self._published_during_handle: set[str] = set()
@@ -190,6 +193,35 @@ class Coordinator:
         return processed
 
     def handle(self, envelope: EventEnvelope) -> list[BlackboardEvent]:
+        event = envelope.event
+        content = event_content(event)
+        with _consumer_context(self.observability, event.trace_carrier):
+            with _span(
+                self.observability,
+                "coordinator.event.consume",
+                {
+                    "event.id": event.id,
+                    "event.type": event_type_value(event),
+                    "blackboard.offset": envelope.offset,
+                    "task.id": str(content.get("task_id", "")),
+                    "task.revision": int(content.get("task_revision", 1)),
+                    "coordination.epoch": int(
+                        content.get("coordination_epoch", 0)
+                    ),
+                },
+                input_payload=content,
+            ) as span:
+                try:
+                    outputs = self._handle_impl(envelope)
+                    span.set_output(
+                        {"output_event_ids": [item.id for item in outputs]}
+                    )
+                    return outputs
+                except Exception as exc:
+                    span.record_exception(exc)
+                    raise
+
+    def _handle_impl(self, envelope: EventEnvelope) -> list[BlackboardEvent]:
         self._published_during_handle = set()
         self._pending_commit_keys = []
         self._current_input_offset = envelope.offset
@@ -281,13 +313,27 @@ class Coordinator:
             )
 
         candidate = None
-        try:
-            candidate = self.group_policy.plan(
-                planning_input, self.group_policy_timeout_s
-            )
-        except Exception:
-            # Group Policy/LLM 是可降级组件；Validator 的实现错误不能在这里吞掉。
-            candidate = None
+        with _span(
+            self.observability,
+            "coordinator.group_policy.invoke",
+            {
+                "task.id": round_state.task_id,
+                "task.revision": round_state.task_revision,
+                "coordination.epoch": round_state.coordination_epoch,
+                "bid.count": len(planning_input.bids),
+            },
+            input_payload=planning_input,
+        ) as span:
+            try:
+                candidate = self.group_policy.plan(
+                    planning_input, self.group_policy_timeout_s
+                )
+                span.set_output(candidate)
+            except Exception as exc:
+                # Group Policy/LLM 是可降级组件；Validator 的实现错误不能在这里吞掉。
+                span.record_exception(exc)
+                span.set_attribute("coordination.fallback", True)
+                candidate = None
 
         # 模型调用期间 Blackboard 可能推进。正式提交前重新读取所有权威输入；
         # 输入变化时放弃模型候选，直接对新快照执行确定性 fallback。
@@ -308,11 +354,22 @@ class Coordinator:
             candidate = None
         planning_input = fresh_input
 
-        validation = (
-            self.validator.validate(candidate, planning_input)
-            if candidate is not None
-            else InvalidPlan([])
-        )
+        with _span(
+            self.observability,
+            "coordinator.plan.validate",
+            {
+                "task.id": round_state.task_id,
+                "task.revision": round_state.task_revision,
+                "coordination.epoch": round_state.coordination_epoch,
+            },
+            input_payload=candidate,
+        ) as span:
+            validation = (
+                self.validator.validate(candidate, planning_input)
+                if candidate is not None
+                else InvalidPlan([])
+            )
+            span.set_output(validation)
         if not isinstance(validation, ValidPlan):
             candidate = deterministic_maximum_matching(planning_input)
             validation = (
@@ -903,3 +960,40 @@ def _estop_affects_plan(content: dict[str, Any], task_view: dict[str, Any]) -> b
             for assignment in plan.get("assignments", [])
         )
     return False
+
+
+class _NullSpan:
+    def set_output(self, payload: Any) -> None:
+        return None
+
+    def record_exception(self, exc: BaseException) -> None:
+        return None
+
+    def set_attribute(self, name: str, value: Any) -> None:
+        return None
+
+
+def _span(
+    observability: Any,
+    name: str,
+    attributes: Optional[dict[str, Any]] = None,
+    *,
+    input_payload: Any = None,
+):
+    factory = getattr(observability, "span", None)
+    if callable(factory):
+        try:
+            return factory(name, attributes=attributes, input_payload=input_payload)
+        except Exception:
+            pass
+    return nullcontext(_NullSpan())
+
+
+def _consumer_context(observability: Any, carrier: dict[str, str]):
+    factory = getattr(observability, "consumer_context", None)
+    if callable(factory):
+        try:
+            return factory(carrier)
+        except Exception:
+            pass
+    return nullcontext()

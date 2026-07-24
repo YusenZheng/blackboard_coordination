@@ -107,3 +107,7 @@ class BlackboardEvent:
     version: int = 0                      # 版本(单调递增)
     idempotency_key: Optional[str] = None # 幂等键(去重)
     extra: dict = field(default_factory=dict)
+    # W3C Trace Context propagation metadata.  It is transport metadata rather
+    # than a business fact, so Blackboard deliberately excludes it from the
+    # canonical idempotency fingerprint.
+    trace_carrier: dict[str, str] = field(default_factory=dict)

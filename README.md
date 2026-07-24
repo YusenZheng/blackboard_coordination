@@ -2,58 +2,107 @@
 
 面向异构机器人集群(无人机 / 无人车 / 机器狗)的**实体群体 Agent 运行底座**。每台设备抽象为一个云端 Agent 成员,围绕一块共享黑板自组织协作完成真实任务。
 
-本仓库是**骨架**:六层结构全部铺开,实现走最小可运行(mock / 占位跑通最细链路),各层待填实处以 `# STATUS:` 和 `TODO` 标注。系统架构说明见 `[docs/01_总架构图.md](docs/01_总架构图.md)`。
+本仓库是**骨架**:六层结构全部铺开,实现走最小可运行(mock / 占位跑通最细链路),各层待填实处以 `# STATUS:` 和 `TODO` 标注。系统架构说明见 [docs/01_总架构图.md](docs/01_总架构图.md)。
 
 ---
 
 ## 环境要求
 
 - Python ≥ 3.10
-- 核心链路**零第三方依赖**(纯标准库),克隆后直接运行
-- 前台接口为可选依赖:`pip install fastapi uvicorn`
+- OpenTelemetry 依赖见 `requirements.txt`（API/SDK 固定为 1.44.0）
+- SQLite、HTTP Dashboard 和 Memory 使用 Python 标准库
 
 ## 快速开始
 
 ```powershell
-cd swarm_brain
+cd C:\path\to\workspace0724
 
-# 1. 本地配置 DeepSeek
-powershell -ExecutionPolicy Bypass -File .\scripts\configure_deepseek.ps1
+# 1. 创建并启用虚拟环境（已有 .venv 可跳过）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
-# 2. 连接检查
+# 2. 安装固定依赖
+python -m pip install -r requirements.txt
+
+# 3. 安全写入本地 DeepSeek 配置
+pwsh -File .\scripts\configure_deepseek.ps1
+
+# 4. 连接检查
 python -m swarm_brain.runtime.deepseek_healthcheck
+```
 
-# 3. 一次运行完整 coordination v2 闭环
-python -m swarm_brain.runtime "帮我找公园里走失的白色萨摩耶"
+真实密钥只应保存在 Git 忽略的 `.env.local`。`.env.example` 仅列出变量名和占位值；
+不要把真实 API Key 写入或提交到 `.env.example`。运行时先读取 `.env.local`，再由
+同名进程环境变量覆盖。
 
-# 4. 启动本地实时看板
-python -m swarm_brain.runtime.dashboard_server
-# 浏览器访问 http://127.0.0.1:8765
+### 启动一次 V2 链路1
 
-# 5. 离线回归测试
-python -m unittest discover
+在仓库根目录执行：
+
+```powershell
+python -m swarm_brain.runtime --capture-mode metadata "帮我找公园里走失的白色萨摩耶"
+```
+
+这条命令会同步执行完整的 V2 链路：
+
+```text
+CoordinationRuntime → Coordinator → AgentProcessHost
+→ PureAgentLoop → ActionExecutor → ToolRuntime/Adapter
+```
+
+成功路径产生九个 Blackboard 业务事件，并把 Trace、结构化日志、指标及记忆资产写入
+`runtime_data/`。`--capture-mode` 可选：
+
+- `metadata`：默认，只保存脱敏元数据和安全摘要。
+- `errors`：仅异常步骤保存脱敏详情。
+- `full`：保存脱敏后的完整载荷，供本地调试使用。
+
+兼容入口也会进入同一条 V2 链路，不再启动旧 Harness：
+
+```powershell
+python -m swarm_brain.runtime.skeleton "帮我找公园里走失的白色萨摩耶"
+```
+
+### 启动可观测平台
+
+```powershell
+python -m swarm_brain.runtime.dashboard_server --host 127.0.0.1 --port 8765
+```
+
+然后访问 <http://127.0.0.1:8765>。平台只允许绑定 loopback 地址。点击“开始执行”
+会在后台创建一次 V2 运行；也可以查看其他进程写入同一 SQLite 数据库的历史运行。
+默认数据文件为：
+
+```text
+runtime_data/observability.sqlite3
+runtime_data/memory.sqlite3
+```
+
+同一端口只应启动一个 Dashboard 进程。停止平台时在启动它的终端按 `Ctrl+C`。
+
+### 启动 Blackboard
+
+当前 Blackboard **不是独立的网络服务或常驻进程**，因此没有单独的
+`python -m ...blackboard` 启动命令。每次 V2 运行都会在进程内创建一块新的
+Blackboard；执行上述 V2 命令，或在 Dashboard 中点击“开始执行”，即会随任务启动
+Blackboard。
+
+Blackboard 是该次运行的协同业务事实源；任务结束后，九个事件的可观测副本保存在
+`observability.sqlite3` 供平台回放，但这不等于把 Blackboard 变成跨运行共享数据库。
+需要单独验证 Blackboard 契约和视图时执行：
+
+```powershell
+python -m unittest swarm_brain.blackboard.tests.test_coordination_bridge -v
+```
+
+### 回归测试
+
+```powershell
+python -m unittest swarm_brain.runtime.tests.test_observability_integration
 ```
 
 正式入口依次完成意图识别、双设备竞标、群体判给、受限动作、回执和任务终态。
-`python -m swarm_brain.runtime.skeleton` 保留为旧版 v1 walking skeleton；默认同样通过
-当前 `runtime/deepseek.py` 做真实意图解析。没有模型配置时，可显式使用
-`python -m swarm_brain.runtime.skeleton --offline` 只验证确定性契约链路。
-
-### 可选:前台接口(HTTP)
-
-```bash
-pip install fastapi uvicorn
-```
-
-```python
-import uvicorn
-from swarm_brain.runtime.harness import Harness
-from api.app import create_app
-
-uvicorn.run(create_app(Harness()), port=8000)
-# GET  /tasks  /devices  /assets/skills  /ledger  /stream
-# POST /tasks(下任务)  /devices/register(注册设备)  /authorize/{id}  /estop
-```
+`python -m swarm_brain.runtime.skeleton "<指令>"` 只是同一 V2 入口的兼容别名。
 
 ---
 
@@ -66,12 +115,13 @@ swarm_brain/
   contracts/    数据契约 + 接口契约。零依赖,被所有层引用。
   blackboard/   群智空间层:append-only 事件流 + 派生视图 + 四账本 + 租约。
   coordination/ 协同层:Agent Loop + 挡位选择器 + 冲突分治 + 上下文装配。
-  assets/       资产层:Trace + Skill(七元组)+ SkillGraph + 自进化 + 运营账本。
+  assets/       资产层:Skill(七元组)+ SkillGraph + 自进化 + 运营账本。
   safety/       安全平面(横切):三层门控 + 信任等级 A0–A4 + 可逆性 R0/R1/R2 + 急停。
   access/       接入层:Agent 化注册 + 工具网关 + 适配器 + 遥测 + 坐标。
   ingress/      北向入口:任务生成流水线 + 事件接入 + 三出向接口。
-  memory/       记忆:私有记忆 + 共享事实库(接口已定义,实现待补)。
-  runtime/      coordination v2 正式装配入口 + 旧版 walking skeleton。
+  observability/ OTel Trace + SQLite 日志/指标/载荷 + 脱敏与应急降级。
+  memory/       SQLite 私有情节记忆 + 审核制共享事实/Skill 候选。
+  runtime/      coordination v2 链路1装配入口 + 本地可观测平台。
 sim/            仿真:可通过性引擎 + 仿真适配器 + 网格桩(独立顶层)。
 eval/           评测:用例 + 指标 + 基线报告(独立顶层)。
 api/            前台接口:FastAPI 端点(可选)。
@@ -84,12 +134,13 @@ tests/          冒烟测试。
 | 契约(地基) | `contracts/`          | Agent Card / 黑板事件 / 任务包 / 动作意图 / 动词表 / 五层接口 Protocol             |
 | 群智空间层  | `blackboard/`         | 事件流 + 派生视图 + 四账本 + 租约                                            |
 | 协同层    | `coordination/`       | Agent Loop / 挡位选择(自主应征·集中式)/ 冲突分治 / 上下文装配                        |
-| 资产层    | `assets/`             | Trace / Skill / SkillGraph / evolution / ledger                  |
+| 资产层    | `assets/`             | Skill / SkillGraph / evolution / ledger                          |
 | 安全平面   | `safety/`             | guardrail / autonomy / reversibility / estop                     |
 | 接入层    | `access/`             | registry / tool_gateway / tools/ / adapters / telemetry / frames |
 | 北向入口   | `ingress/`            | task_gen(三段流水线)/ event_ingress / interfaces_out                  |
-| 记忆     | `memory/`             | 私有记忆 + 事实库(接口位)                                                  |
-| 运行时    | `runtime/`            | CoordinationRuntime / DeepSeek adapters / 旧版 skeleton            |
+| 可观测平面 | `observability/`      | OTel Trace / 结构化日志 / 指标 / SQLite / 脱敏 / 保留策略                   |
+| 记忆     | `memory/`             | 私有 episodic + 审核制共享事实与 SkillCandidate                           |
+| 运行时    | `runtime/`            | CoordinationRuntime / DeepSeek adapters / Dashboard              |
 | 独立顶层   | `sim/` `eval/` `api/` | 仿真 / 评测 / 前台接口                                                   |
 
 
@@ -102,17 +153,23 @@ tests/          冒烟测试。
 
 
 
-## 旧版 walking skeleton 演示什么
+## V2 链路1与可观测闭环
 
-`python -m swarm_brain.runtime.skeleton` 使用当前 DeepSeek 配置并依次跑四条链路；
-`--offline` 模式才使用确定性意图 fallback：
+当前唯一正式运行链为：
 
-1. **主链路**:下任务 → 各设备出价 → 招投标判给 → 安全校验 → Agent Loop 自行调用工具 → 回执 → Trace 落档。
-2. **授权点 + 并发租约**:不可逆动作挂起等待人工确认;两设备并发 claim 同一资源,一方获租、一方被拒。
-3. **可插拔挡位**:同一任务分别走自主应征与集中式两种协同挡位。
-4. **线索重协同**:执行中产生新线索(CLUE),事件驱动各 Agent 就地重新协同。
+```text
+CoordinationRuntime → Coordinator → AgentProcessHost
+→ PureAgentLoop → ActionExecutor → ToolRuntime/Adapter
+```
 
-收尾另演示:遥测旁路、急停旁路(急停中拒绝下发动作、解除后恢复)、Trace 模型级细节。
+一次成功运行仍以 Blackboard 的九个业务事件为权威事实。Trace、模块输入输出、
+结构化日志和指标进入独立观测库；任务结束后由确定性 `TaskEpisodeBuilder` 生成
+TraceAsset，合格资产自动写入参与 Agent 的私有情节记忆。共享事实与
+SkillCandidate 必须在本地 Dashboard 审核后才能使用。
+
+默认载荷模式为 `metadata`；可在调用 `CoordinationRuntime.run(...,
+capture_mode="errors"|"full")` 时选择。无论模式如何，凭据、Cookie、Token、
+隐藏思维和二进制正文都不会保存。
 
 ---
 

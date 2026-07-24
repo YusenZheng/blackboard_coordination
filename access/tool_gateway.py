@@ -38,12 +38,14 @@ class ToolGateway:
         device_registry=None,
         blackboard=None,
         trace_listener=None,
+        observability=None,
     ):
         self._adapters = adapters or {}   # device_id -> AdapterPort
         self._estop = estop_bus           # B1:急停总线,下发前查
         self._device_registry = device_registry
         self._blackboard = blackboard
         self._trace_listener = trace_listener
+        self._observability = observability
         self._runtime = None
         self.dispatched_intent_ids: list[str] = []
         # Tool 注册表:call_tool 从这里查具体 Tool(而非靠前缀猜)
@@ -165,6 +167,7 @@ class ToolGateway:
                 adapters=self._adapters,
                 blackboard=self._blackboard,
                 trace_listener=self._trace_listener,
+                observability=self._observability,
             )
         return self._runtime
 
